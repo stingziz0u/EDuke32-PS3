@@ -1,0 +1,1242 @@
+// PS3 interface layer for the Build Engine (EDuke32-PS3)
+//
+// The PS3 side of the "render layer" contract (baselayer.h), in place of
+// sdlayer.cpp: the boot, sysutil, the video mode and the frame on the RSX,
+// the DualShock 3 as a game controller, message boxes on the TV, the
+// clock, and every way out.
+//
+// Boot steps, each one a line in USRDIR/eduke32-ps3.log, so a black
+// screen can be located from the log alone (handoff notes 4.1):
+//
+//   [0] main() reached              -> if missing: -lrt -llv2 in the link
+//   [1] game thread                 -> the EBOOT's own stack is tiny
+//   [2] sysutil callback            -> without it, "Quit Game" reboots
+//   [3] file system (USRDIR)
+//   [4] CPU (endianness, sizes)
+//   [5] DualShock 3
+//   [6] RSX
+//   [7] game data found
+//   [8] the engine takes over (app_main)
+//   [9] shutdown (PS3_Exit: every way out goes through it)
+//
+// Copyright (C) 2026 the EDuke32-PS3 contributors. GPL v2 or later, as
+// the rest of EDuke32.
+
+#include "a.h"
+#include "build.h"
+#include "cache1d.h"
+#include "compat.h"
+#include "engine_priv.h"
+#include "osd.h"
+#include "palette.h"
+#include "renderlayer.h"
+#include "softsurface.h"
+#include "communityapi.h"
+
+#include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+
+#include <ppu-lv2.h>
+#include <ppu-types.h>
+#include <lv2/systime.h>
+#include <sys/process.h>
+#include <sys/systime.h>
+#include <sys/thread.h>
+#include <sysutil/sysutil.h>
+
+#include "ps3_platform.h"
+#include "ps3_pad.h"
+#include "driver_ps3.h"
+#include <unistd.h>
+
+// The loader sizes the primary thread's stack from this ELF section.
+SYS_PROCESS_PARAM(1001, 0x100000);
+
+// The engine and the game run here. Build keeps big arrays on the stack
+// and the renderer recurses (mirrors, room over room).
+#define GAME_STACK_SIZE (8 * 1024 * 1024)
+
+static volatile int exit_requested;
+static int sysutil_registered;
+static int pad_ok;
+
+// ---------------------------------------
+//
+// Globals of the layer (as sdlayer.cpp)
+//
+// ---------------------------------------
+
+int32_t inputchecked = 0;
+
+char quitevent = 0, appactive = 1, novideo = 0;
+
+int32_t maxrefreshfreq = 0;
+int32_t xres = -1, yres = -1, bpp = 0, fullscreen = 0, bytesperline;
+double refreshfreq = 60.0;
+intptr_t frameplace = 0;
+int32_t lockcount = 0;
+char modechange = 1;
+char offscreenrendering = 0;
+char videomodereset = 0;
+int32_t nofog = 0;
+
+bool g_ImGuiCaptureInput = false;
+uint8_t g_ImGuiCapturedDevices;
+
+static char modeschecked = 0;
+static int32_t vsync_renderlayer;
+
+#if !defined STARTUP_SETUP_WINDOW
+int32_t startwin_open(void) { return 0; }
+int32_t startwin_close(void) { return 0; }
+int32_t startwin_puts(const char *s) { UNREFERENCED_PARAMETER(s); return 0; }
+int32_t startwin_idle(void *s) { UNREFERENCED_PARAMETER(s); return 0; }
+int32_t startwin_settitle(const char *s) { UNREFERENCED_PARAMETER(s); return 0; }
+int32_t startwin_run(void) { return 0; }
+bool startwin_isopen(void) { return false; }
+#endif
+
+// ---------------------------------------
+//
+// Time
+//
+// ---------------------------------------
+
+unsigned long long PS3_Micros(void)
+{
+    return (unsigned long long)sysGetSystemTime();
+}
+
+// newlib on the PS3 has neither (ps3/compat/ps3_compat.h). The Build timer
+// reads CLOCK_MONOTONIC through enet_gettime; the realtime clock is only
+// there for completeness.
+extern "C" int clock_gettime(clockid_t clock_id, struct timespec *tp)
+{
+    if (!tp)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (clock_id == CLOCK_REALTIME)
+    {
+        struct timeval tv;
+
+        gettimeofday(&tv, nullptr);
+        tp->tv_sec  = tv.tv_sec;
+        tp->tv_nsec = tv.tv_usec * 1000;
+        return 0;
+    }
+
+    uint64_t const us = (uint64_t)sysGetSystemTime();
+
+    tp->tv_sec  = (time_t)(us / 1000000u);
+    tp->tv_nsec = (long)(us % 1000000u) * 1000;
+    return 0;
+}
+
+extern "C" int nanosleep(const struct timespec *rqtp, struct timespec *rmtp)
+{
+    if (rmtp)
+    {
+        rmtp->tv_sec = 0;
+        rmtp->tv_nsec = 0;
+    }
+
+    if (!rqtp || rqtp->tv_sec < 0 || rqtp->tv_nsec < 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    uint64_t us = (uint64_t)rqtp->tv_sec * 1000000u + (uint64_t)rqtp->tv_nsec / 1000u;
+
+    if (us == 0)
+        sysThreadYield();
+    else
+        while (us > 0)
+        {
+            uint32_t const step = us > 1000000u ? 1000000u : (uint32_t)us;
+            sysUsleep(step);
+            us -= step;
+        }
+
+    return 0;
+}
+
+// lv2's sys_memory_get_user_memory_size (syscall 352)
+static s32 UserMemorySize(uint32_t *total)
+{
+    struct { u32 total, available; } info = {};
+
+    lv2syscall1(352, (u64)(uintptr_t)&info);
+    *total = info.total;
+    return_to_user_prog(s32);
+}
+
+// newlib declares sysconf() but has none. The engine asks for the page
+// size (cache1d's index alignment) and the amount of memory (tiles.cpp
+// sizes its art cache from it).
+extern "C" long sysconf(int name)
+{
+    switch (name)
+    {
+        case _SC_PAGESIZE:
+            return 4096;
+
+        case _SC_PHYS_PAGES:
+        {
+            uint32_t total = 0;
+
+            if (UserMemorySize(&total) != 0 || total == 0)
+                total = 213u << 20;  // what a game gets on a retail PS3
+
+            return (long)(total / 4096);
+        }
+
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+}
+
+extern "C" int gethostname(char *name, size_t len)
+{
+    if (!name || len == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    Bstrncpyz(name, "ps3", len);
+    return 0;
+}
+
+// ---------------------------------------
+//
+// sysutil
+//
+// ---------------------------------------
+
+static void SysutilCallback(u64 status, u64 param, void *userdata)
+{
+    UNREFERENCED_PARAMETER(userdata);
+
+    switch (status)
+    {
+        case SYSUTIL_EXIT_GAME:
+            PS3_Log("[sysutil] SYSUTIL_EXIT_GAME -> quit");
+            exit_requested = 1;
+            break;
+
+        case SYSUTIL_DRAW_BEGIN:
+            PS3_Log("[sysutil] XMB overlay: draw begin");
+            break;
+
+        case SYSUTIL_DRAW_END:
+            PS3_Log("[sysutil] XMB overlay: draw end");
+            break;
+
+        case SYSUTIL_MENU_OPEN:
+            PS3_Log("[sysutil] XMB menu open");
+            break;
+
+        case SYSUTIL_MENU_CLOSE:
+            PS3_Log("[sysutil] XMB menu close");
+            break;
+
+        default:
+            PS3_Log("[sysutil] event 0x%llx (param 0x%llx)", (unsigned long long)status, (unsigned long long)param);
+            break;
+    }
+}
+
+void PS3_Pump(void)
+{
+    if (sysutil_registered)
+        sysUtilCheckCallback();
+}
+
+int PS3_ExitRequested(void)
+{
+    return exit_requested;
+}
+
+// The game's way out for the XMB's "Quit Game": EDuke32-PS3 defines it to
+// save the settings first (ps3_game_duke3d.cpp). Without one, out at once.
+extern "C" void PS3_GameQuit(void) __attribute__((weak));
+
+static void HandleExitRequest(void)
+{
+    static int handling;
+
+    if (!exit_requested || handling++)
+        return;
+
+    PS3_Log("[9] XMB quit: leaving");
+
+    if (PS3_GameQuit)
+        PS3_GameQuit();
+
+    PS3_Exit(0);
+}
+
+// ---------------------------------------
+//
+// Leaving
+//
+// ---------------------------------------
+
+// Every way out ends here: the engine's exit() and abort() are renamed to
+// PS3_exit / PS3_abort (ps3/Makefile), and so are the XMB's "Quit Game"
+// and fatal errors. Whatever the system runs on its own (the audio thread,
+// flips) is stopped before the process goes, or the whole console hangs
+// (handoff notes 3.8, 3.64).
+void PS3_Exit(int code)
+{
+    static int exiting;
+
+    if (exiting++)
+        exit(code);
+
+    PS3_Log("[9] exit(%d): shutting down", code);
+
+    PS3Drv_PCM_Shutdown();
+    PS3_Video_Shutdown();
+
+    if (pad_ok)
+    {
+        PS3_Pad_Shutdown();
+        pad_ok = 0;
+    }
+
+    if (sysutil_registered)
+    {
+        sysUtilUnregisterCallback(0);
+        sysutil_registered = 0;
+    }
+
+    PS3_Log("[9] bye");
+    PS3_LogShutdown();
+
+    exit(code);
+}
+
+extern "C" void PS3_exit(int code)
+{
+    PS3_Exit(code);
+}
+
+extern "C" void PS3_abort(void)
+{
+    PS3_Log("abort() called");
+    PS3_Exit(3);
+}
+
+// ---------------------------------------
+//
+// Message boxes: a text screen on the TV and the pad
+//
+// ---------------------------------------
+
+#define TEXT_COLUMNS 60
+#define TEXT_LINES   16
+
+// Fresh presses only: the button that got here (the menu's X) doesn't count.
+// Returns the button, or 0 on timeout / XMB quit.
+static unsigned WaitForButtons(unsigned mask, int seconds)
+{
+    ps3_padstate_t st;
+    unsigned last = 0xffffu;
+
+    if (!pad_ok)
+        pad_ok = PS3_Pad_Init() == 0;
+
+    for (int ms = 0; ms < seconds * 1000 && !exit_requested; ms += 20)
+    {
+        PS3_Pad_Poll(&st);
+
+        unsigned const now = st.connected ? st.buttons : 0;
+        unsigned const down = now & ~last & mask;
+
+        if (down)
+            return down;
+
+        last = now;
+        sysUsleep(20000);
+        PS3_Pump();
+    }
+
+    return 0;
+}
+
+static void ShowText(const char *title, const char *message, const char *footer1, const char *footer2)
+{
+    static char buf[TEXT_LINES][TEXT_COLUMNS + 1];
+    const char *lines[TEXT_LINES + 4];
+    const char *p = message ? message : "";
+    int n = 0;
+
+    // wrap the message at spaces
+    while (*p && n < TEXT_LINES)
+    {
+        int len = 0, cut = -1;
+
+        while (p[len] && p[len] != '\n' && len < TEXT_COLUMNS)
+        {
+            if (p[len] == ' ')
+                cut = len;
+            len++;
+        }
+
+        if (p[len] && p[len] != '\n' && cut > 0)
+            len = cut;
+
+        memcpy(buf[n], p, (size_t)len);
+        buf[n][len] = '\0';
+        lines[n] = buf[n];
+        n++;
+
+        p += len;
+
+        if (*p == '\n' || *p == ' ')
+            p++;
+    }
+
+    lines[n++] = "";
+    if (footer1) lines[n++] = footer1;
+    if (footer2) lines[n++] = footer2;
+
+    if (PS3_Video_Init() == 0)
+        PS3_Video_TextScreen(title, lines, n);
+}
+
+void PS3_FatalScreen(const char *title, const char *message)
+{
+    PS3_Log("[error] %s: %s", title ? title : "", message ? message : "");
+    ShowText(title, message, "Details: USRDIR/eduke32-ps3.log", "Press X to go on.");
+    WaitForButtons(PS3_PAD_CROSS, 120);
+}
+
+int32_t wm_msgbox(const char *name, const char *fmt, ...)
+{
+    char buf[MSGBOX_PRINTF_MAX];
+    va_list va;
+
+    va_start(va, fmt);
+    Bvsnprintf(buf, sizeof(buf), fmt, va);
+    va_end(va);
+
+    PS3_FatalScreen(name, buf);
+    return 0;
+}
+
+int32_t wm_ynbox(const char *name, const char *fmt, ...)
+{
+    char buf[MSGBOX_PRINTF_MAX];
+    va_list va;
+
+    va_start(va, fmt);
+    Bvsnprintf(buf, sizeof(buf), fmt, va);
+    va_end(va);
+
+    PS3_Log("[question] %s: %s", name ? name : "", buf);
+    ShowText(name, buf, "X = Yes      O = No", nullptr);
+
+    // no answer in two minutes: yes, the safe default of every question
+    // the game asks (import the old settings, use the internal scripts)
+    unsigned const b = WaitForButtons(PS3_PAD_CROSS | PS3_PAD_CIRCLE, 120);
+    int const yes = !(b & PS3_PAD_CIRCLE);
+
+    PS3_Log("[question] answer: %s", yes ? "yes" : "no");
+    return yes;
+}
+
+void wm_setapptitle(const char *name)
+{
+    UNREFERENCED_PARAMETER(name);
+}
+
+// ---------------------------------------
+//
+// System
+//
+// ---------------------------------------
+
+int32_t initsystem(void)
+{
+    timerInit(CLOCKTICKSPERSECOND);
+
+    frameplace = 0;
+    lockcount = 0;
+
+    if (PS3_Video_Init() != 0)
+    {
+        LOG_F(ERROR, "The RSX did not start.");
+        novideo = 1;
+    }
+
+    g_numdisplays = 1;
+    LOG_F(INFO, "Using the PS3 RSX video layer.");
+
+    return 0;
+}
+
+void uninitsystem(void)
+{
+    uninitinput();
+    timerUninit();
+}
+
+void system_getcvars(void)
+{
+    vsync = videoSetVsync(vsync);
+}
+
+int debugprintf(const char *f, ...)
+{
+    UNREFERENCED_PARAMETER(f);
+    return 0;
+}
+
+// ---------------------------------------
+//
+// Input: the DualShock 3 as a game controller (SDL GameController order,
+// which mact and the game's default bindings expect)
+//
+// ---------------------------------------
+
+enum
+{
+    PADBTN_A, PADBTN_B, PADBTN_X, PADBTN_Y,
+    PADBTN_BACK, PADBTN_GUIDE, PADBTN_START,
+    PADBTN_LEFTSTICK, PADBTN_RIGHTSTICK,
+    PADBTN_LEFTSHOULDER, PADBTN_RIGHTSHOULDER,
+    PADBTN_DPAD_UP, PADBTN_DPAD_DOWN, PADBTN_DPAD_LEFT, PADBTN_DPAD_RIGHT,
+    PADBTN_COUNT
+};
+
+enum
+{
+    PADAXIS_LEFTX, PADAXIS_LEFTY, PADAXIS_RIGHTX, PADAXIS_RIGHTY,
+    PADAXIS_TRIGGERLEFT, PADAXIS_TRIGGERRIGHT,
+    PADAXIS_COUNT
+};
+
+static const struct { unsigned ps3; int button; } padmap[] =
+{
+    { PS3_PAD_CROSS,    PADBTN_A },
+    { PS3_PAD_CIRCLE,   PADBTN_B },
+    { PS3_PAD_SQUARE,   PADBTN_X },
+    { PS3_PAD_TRIANGLE, PADBTN_Y },
+    { PS3_PAD_SELECT,   PADBTN_BACK },
+    { PS3_PAD_START,    PADBTN_START },
+    { PS3_PAD_L3,       PADBTN_LEFTSTICK },
+    { PS3_PAD_R3,       PADBTN_RIGHTSTICK },
+    { PS3_PAD_L1,       PADBTN_LEFTSHOULDER },
+    { PS3_PAD_R1,       PADBTN_RIGHTSHOULDER },
+    { PS3_PAD_UP,       PADBTN_DPAD_UP },
+    { PS3_PAD_DOWN,     PADBTN_DPAD_DOWN },
+    { PS3_PAD_LEFT,     PADBTN_DPAD_LEFT },
+    { PS3_PAD_RIGHT,    PADBTN_DPAD_RIGHT },
+};
+
+static int StickAxis(int v)
+{
+    // 0..255, 128 = center (y grows downwards, as SDL's)
+    int const a = (v - 128) * 258;
+    return clamp(a, -32768, 32767);
+}
+
+static void PollPad(void)
+{
+    ps3_padstate_t st;
+
+    if (!pad_ok || !joystick.pAxis)
+        return;
+
+    PS3_Pad_Poll(&st);
+
+    if (!st.connected)
+    {
+        joystick.bits = 0;
+        for (int i = 0; i < joystick.numAxes; i++)
+            joystick.pAxis[i] = 0;
+        return;
+    }
+
+    if (!appactive)
+        return;
+
+    int32_t bits = 0;
+
+    for (auto const &m : padmap)
+        if (st.buttons & m.ps3)
+            bits |= 1 << m.button;
+
+    joystick.bits = bits;
+
+    joystick.pAxis[PADAXIS_LEFTX]  = StickAxis(st.lx);
+    joystick.pAxis[PADAXIS_LEFTY]  = StickAxis(st.ly);
+    joystick.pAxis[PADAXIS_RIGHTX] = StickAxis(st.rx);
+    joystick.pAxis[PADAXIS_RIGHTY] = StickAxis(st.ry);
+    joystick.pAxis[PADAXIS_TRIGGERLEFT]  = (st.buttons & PS3_PAD_L2) ? 32767 : 0;
+    joystick.pAxis[PADAXIS_TRIGGERRIGHT] = (st.buttons & PS3_PAD_R2) ? 32767 : 0;
+}
+
+void joyScanDevices()
+{
+    inputdevices &= ~DEV_JOYSTICK;
+
+    if (!pad_ok)
+        pad_ok = PS3_Pad_Init() == 0;
+
+    if (!pad_ok)
+    {
+        VLOG_F(LOG_INPUT, "No game controllers found.");
+        return;
+    }
+
+    joystick.flags        = 0;
+    joystick.numBalls     = 0;
+    joystick.numHats      = 0;
+    joystick.numAxes      = PADAXIS_COUNT;
+    joystick.numButtons   = PADBTN_COUNT;
+    joystick.validButtons = (1u << PADBTN_COUNT) - 1 - (1u << PADBTN_GUIDE);
+    joystick.isGameController = 1;
+    joystick.hasRumble = 0;
+
+    Xfree(joystick.pAxis);
+    joystick.pAxis = (int32_t *)Xcalloc(joystick.numAxes, sizeof(int32_t));
+    DO_FREE_AND_NULL(joystick.pHat);
+
+    inputdevices |= DEV_JOYSTICK;
+
+    VLOG_F(LOG_INPUT, "Using controller: DualShock 3.");
+}
+
+int32_t initinput(void (*hotplugCallback)(void) /*= nullptr*/)
+{
+    if (hotplugCallback)
+        g_controllerHotplugCallback = hotplugCallback;
+
+    inputdevices = DEV_KEYBOARD;
+    g_mouseGrabbed = false;
+    memset(g_keyNameTable, 0, sizeof(g_keyNameTable));
+
+    if ((g_controllerSupportFlags & CONTROLLER_DISABLED) == 0)
+        joyScanDevices();
+
+    return 0;
+}
+
+void uninitinput(void)
+{
+    mouseUninit();
+}
+
+const char *joyGetName(int32_t what, int32_t num)
+{
+    static char const *const axisStrings[PADAXIS_COUNT] =
+    {
+        "Left Stick X-Axis",
+        "Left Stick Y-Axis",
+        "Right Stick X-Axis",
+        "Right Stick Y-Axis",
+        "L2",
+        "R2",
+    };
+
+    static char const *const buttonStrings[PADBTN_COUNT] =
+    {
+        "Cross",
+        "Circle",
+        "Square",
+        "Triangle",
+        "Select",
+        "PS",
+        "Start",
+        "L3",
+        "R3",
+        "L1",
+        "R1",
+        "D-Pad Up",
+        "D-Pad Down",
+        "D-Pad Left",
+        "D-Pad Right",
+    };
+
+    static char tmp[64];
+
+    switch (what)
+    {
+        case 0:  // axis
+            if ((unsigned)num >= (unsigned)joystick.numAxes)
+                return NULL;
+            if (num < PADAXIS_COUNT)
+                return axisStrings[num];
+            Bsprintf(tmp, "Axis %d", num);
+            return tmp;
+
+        case 1:  // button
+            if ((unsigned)num >= (unsigned)joystick.numButtons)
+                return NULL;
+            if (num < PADBTN_COUNT)
+                return buttonStrings[num];
+            Bsprintf(tmp, "Button %d", num);
+            return tmp;
+
+        case 2:  // hat
+            return NULL;
+
+        default:
+            return NULL;
+    }
+}
+
+// No mouse.
+void mouseInit(void)
+{
+    g_mouseEnabled = 0;
+}
+
+void mouseUninit(void)
+{
+    g_mouseEnabled = 0;
+    g_mouseGrabbed = 0;
+}
+
+void mouseGrabInput(bool grab)
+{
+    g_mouseGrabbed = grab;
+}
+
+void mouseLockToWindow(char a)
+{
+    if (!(a & 2))
+    {
+        mouseGrabInput(a);
+        g_mouseLockedToWindow = g_mouseGrabbed;
+    }
+}
+
+// ---------------------------------------
+//
+// Video: the internal resolution is any of these; the RSX scales it to
+// the 720p output at its own aspect (square pixels, as the engine draws).
+//
+// ---------------------------------------
+
+static vec2_t const ps3modes[] =
+{
+    {  640, 360 },
+    {  640, 400 },
+    {  640, 480 },
+    {  848, 480 },
+    {  960, 540 },
+    {  960, 720 },
+    { 1024, 576 },
+    { 1280, 720 },
+};
+
+static int sortmodes(const void *a_, const void *b_)
+{
+    auto a = (const struct validmode_t *)b_;
+    auto b = (const struct validmode_t *)a_;
+    int x;
+
+    if ((x = a->fs   - b->fs)   != 0) return x;
+    if ((x = a->bpp  - b->bpp)  != 0) return x;
+    if ((x = a->xdim - b->xdim) != 0) return x;
+    if ((x = a->ydim - b->ydim) != 0) return x;
+
+    return 0;
+}
+
+void videoGetModes(int display)
+{
+    UNREFERENCED_PARAMETER(display);
+
+    if (modeschecked || novideo)
+        return;
+
+    validmodecnt = 0;
+
+    for (auto const &m : ps3modes)
+        for (int fs = 1; fs >= 0; --fs)
+            if (validmodecnt < MAXVALIDMODES)
+            {
+                validmode[validmodecnt].xdim = m.x;
+                validmode[validmodecnt].ydim = m.y;
+                validmode[validmodecnt].bpp  = 8;
+                validmode[validmodecnt].fs   = fs;
+                validmodecnt++;
+            }
+
+    qsort((void *)validmode, validmodecnt, sizeof(struct validmode_t), &sortmodes);
+
+    modeschecked = 1;
+}
+
+int32_t videoCheckMode(int32_t *x, int32_t *y, int32_t c, int32_t fs, int32_t forced)
+{
+    UNREFERENCED_PARAMETER(forced);
+
+    int32_t nearest = -1, odx = 9999, ody = 9999;
+
+    videoGetModes();
+
+    if (c > 8)
+        return -1;
+
+    *x = clamp(*x & ~1, 320, MAXXDIM);
+    *y = clamp(*y & ~1, 200, MAXYDIM);
+
+    // windowed or not makes no difference here: both are in the list
+    for (int i = 0; i < validmodecnt; i++)
+    {
+        if (validmode[i].bpp != c || validmode[i].fs != (fs & 1))
+            continue;
+
+        int32_t const dx = klabs(validmode[i].xdim - *x);
+        int32_t const dy = klabs(validmode[i].ydim - *y);
+
+        if (!(dx | dy))
+        {
+            nearest = i;
+            break;
+        }
+
+        if ((dx <= odx) && (dy <= ody))
+        {
+            nearest = i;
+            odx = dx;
+            ody = dy;
+        }
+    }
+
+    if (nearest < 0)
+        return -1;
+
+    *x = validmode[nearest].xdim;
+    *y = validmode[nearest].ydim;
+
+    return nearest;
+}
+
+char const *videoGetDisplayName(int display)
+{
+    UNREFERENCED_PARAMETER(display);
+    return "TV";
+}
+
+int32_t videoSetVsync(int32_t newSync)
+{
+    // the RSX flips on the vertical blank: always in sync
+    vsync_renderlayer = newSync;
+    return newSync;
+}
+
+void engineBeginImGuiFrame(void) { }
+void engineEndImGuiInput(void) { }
+void engineBeginImGuiInput(void) { }
+void engineSetupImGui(void) { }
+
+int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
+{
+    if (c > 8)
+        return -1;
+
+    if (videoCheckMode(&x, &y, c, fs, 0) < 0)
+        return -1;
+
+    while (lockcount)
+        videoEndDrawing();
+
+    if (PS3_Video_Init() != 0)
+        return -1;
+
+    softsurface_destroy();
+
+    VLOG_F(LOG_GFX, "Setting video mode %dx%d (8-bpp, scaled to the TV by the RSX).", x, y);
+
+    xres = x;
+    yres = y;
+    bpp = c;
+    fullscreen = fs;
+    numpages = 1;
+    frameplace = 0;
+    lockcount = 0;
+    modechange = 1;
+    videomodereset = 0;
+    refreshfreq = 60.0;
+
+    // brightness goes into the palette, as on DOS (palette.cpp)
+    gammabrightness = 0;
+
+    videoFadePalette(palfadergb.r, palfadergb.g, palfadergb.b, palfadedelta);
+
+    return 0;
+}
+
+void videoResetMode(void)
+{
+    videomodereset = 1;
+    modeschecked = 0;
+}
+
+void videoBeginDrawing(void)
+{
+    if (bpp > 8)
+    {
+        if (offscreenrendering) return;
+        frameplace = 0;
+        bytesperline = 0;
+        modechange = 0;
+        return;
+    }
+
+    // lock the frame
+    if (lockcount++ > 0)
+        return;
+
+    static intptr_t backupFrameplace = 0;
+
+    if (inpreparemirror)
+    {
+        //POGO: if we are offscreenrendering and we need to render a mirror
+        //      or we are rendering a mirror and we start offscreenrendering,
+        //      backup our offscreen target so we can restore it later
+        //      (but only allow one level deep,
+        //       i.e. no viewscreen showing a camera showing a mirror that reflects the same viewscreen and recursing)
+        if (offscreenrendering)
+        {
+            if (!backupFrameplace)
+                backupFrameplace = frameplace;
+            else if (frameplace != (intptr_t)mirrorBuffer &&
+                     frameplace != backupFrameplace)
+                return;
+        }
+
+        frameplace = (intptr_t)mirrorBuffer;
+
+        if (offscreenrendering)
+            return;
+    }
+    else if (offscreenrendering)
+    {
+        if (backupFrameplace)
+        {
+            frameplace = backupFrameplace;
+            backupFrameplace = 0;
+        }
+        return;
+    }
+    else
+    {
+        frameplace = (intptr_t)softsurface_getBuffer();
+    }
+
+    if (modechange)
+    {
+        bytesperline = xdim;
+        calc_ylookup(bytesperline, ydim);
+        modechange = 0;
+    }
+}
+
+void videoEndDrawing(void)
+{
+    if (bpp > 8)
+    {
+        if (!offscreenrendering) frameplace = 0;
+        return;
+    }
+
+    if (!frameplace) return;
+    if (lockcount > 1) { lockcount--; return; }
+    if (!offscreenrendering) frameplace = 0;
+    if (lockcount == 0) return;
+    lockcount = 0;
+}
+
+void videoShowFrame(int32_t w)
+{
+    UNREFERENCED_PARAMETER(w);
+
+    if (offscreenrendering || novideo)
+        return;
+
+    if (lockcount)
+    {
+        LOG_F(WARNING, "Frame was still locked at a depth of %d when videoShowFrame() was called!", lockcount);
+        while (lockcount) videoEndDrawing();
+    }
+
+    uint8_t *const buf = softsurface_getBuffer();
+
+    if (buf)
+    {
+        vec2_t const res = softsurface_getBufferResolution();
+        PS3_Video_Present8(buf, res.x, res.y, xres, yres);
+    }
+
+    PS3_Pump();
+}
+
+int32_t videoUpdatePalette(int32_t start, int32_t num)
+{
+    UNREFERENCED_PARAMETER(start);
+    UNREFERENCED_PARAMETER(num);
+
+    if (bpp > 8)
+        return 0;
+
+    uint8_t rgb[768];
+
+    for (int i = 0; i < 256; i++)
+    {
+        rgb[i * 3 + 0] = curpalettefaded[i].r;
+        rgb[i * 3 + 1] = curpalettefaded[i].g;
+        rgb[i * 3 + 2] = curpalettefaded[i].b;
+    }
+
+    PS3_Video_SetPalette(rgb);
+    return 0;
+}
+
+int32_t videoSetGamma(void)
+{
+    // gammabrightness is 0: the engine brightens the palette itself
+    return 0;
+}
+
+// ---------------------------------------
+//
+// Events
+//
+// ---------------------------------------
+
+int32_t handleevents_peekkeys(void)
+{
+    return 0;
+}
+
+int32_t handleevents(void)
+{
+    PS3_Pump();
+    HandleExitRequest();
+
+    PollPad();
+
+    inputchecked = 0;
+    timerUpdateClock();
+
+    communityapiRunCallbacks();
+
+    return 0;
+}
+
+// ---------------------------------------
+//
+// Boot
+//
+// ---------------------------------------
+
+static int ProbeDir(const char *path, int list)
+{
+    DIR *d = opendir(path);
+
+    if (!d)
+    {
+        PS3_Log("[3] %s -> can't open", path);
+        return -1;
+    }
+
+    int count = 0;
+    struct dirent *e;
+
+    while ((e = readdir(d)) != NULL)
+    {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+            continue;
+
+        if (list && count < 40)
+            PS3_Log("[3]     %s", e->d_name);
+
+        count++;
+    }
+
+    closedir(d);
+    PS3_Log("[3] %s -> OK, %d entries", path, count);
+
+    return count;
+}
+
+static void ProbeFilesystem(void)
+{
+    PS3_Log("[3] file system");
+    ProbeDir(PS3_USRDIR, 1);
+
+    FILE *f = fopen(PS3_USRDIR "/.writetest", "w");
+
+    if (f)
+    {
+        fputs("ok", f);
+        fclose(f);
+        remove(PS3_USRDIR "/.writetest");
+        PS3_Log("[3] %s -> WRITABLE", PS3_USRDIR);
+    }
+    else
+        PS3_Log("[3] %s -> NOT writable (settings and saves will fail)", PS3_USRDIR);
+}
+
+static void ProbeCPU(void)
+{
+    unsigned int one = 1;
+
+    PS3_Log("[4] CPU is %s-endian, sizeof(long)=%d sizeof(void*)=%d, char is %s",
+            (*(unsigned char *)&one == 1) ? "little" : "big",
+            (int)sizeof(long), (int)sizeof(void *),
+            ((char)0xff < 0) ? "signed" : "unsigned");
+}
+
+static int HasExtension(const char *name, const char *ext)
+{
+    size_t const n = strlen(name), e = strlen(ext);
+    return n > e && !Bstrcasecmp(name + n - e, ext);
+}
+
+// Any group file in USRDIR: the engine looks at them itself (grpinfo) and
+// picks the game; this only tells "nothing at all" from "something".
+static int FindGameData(void)
+{
+    DIR *d = opendir(PS3_USRDIR);
+
+    if (!d)
+        return 0;
+
+    int found = 0;
+    struct dirent *e;
+
+    while ((e = readdir(d)) != NULL)
+        if (HasExtension(e->d_name, ".grp") || HasExtension(e->d_name, ".ssi"))
+        {
+            PS3_Log("[7] game data: %s", e->d_name);
+            found++;
+        }
+
+    closedir(d);
+
+    return found;
+}
+
+static void NoDataScreen(void)
+{
+    static const char *const lines[] =
+    {
+        "No game data found.",
+        "",
+        "Copy the files of YOUR copy of Duke Nukem 3D",
+        "(GOG, Steam, CD or the shareware) by FTP to:",
+        "  " PS3_USRDIR "/",
+        "",
+        "At least DUKE3D.GRP. Add-ons (DUKEDC.GRP, VACATION.GRP,",
+        "NWINTER.GRP...) go in the same folder.",
+        "",
+        "Press X to go back to the XMB.",
+    };
+
+    PS3_Log("[7] no game data: showing the instructions");
+
+    if (PS3_Video_Init() == 0)
+    {
+        PS3_Video_TextScreen("EDUKE32", lines, ARRAY_SIZE(lines));
+        WaitForButtons(PS3_PAD_CROSS, 120);
+    }
+}
+
+static void GameMain(void)
+{
+    // -usecwd: the settings and the saves in the "working directory",
+    // which is USRDIR (ps3_stdio.c), not in a .config folder in a home
+    static char arg0[] = "eduke32";
+    static char arg1[] = "-usecwd";
+    static char *argv[] = { arg0, arg1, nullptr };
+    int argc = 2;
+
+    PS3_Log("[1] game thread running");
+
+    if (sysUtilRegisterCallback(0, SysutilCallback, NULL) == 0)
+    {
+        sysutil_registered = 1;
+        PS3_Log("[2] sysutil callback registered");
+    }
+    else
+        PS3_Log("[2] WARNING: sysUtilRegisterCallback failed");
+
+    ProbeFilesystem();
+    ProbeCPU();
+
+    pad_ok = PS3_Pad_Init() == 0;
+    PS3_Log("[5] pad: %s", pad_ok ? "ok" : "FAILED");
+
+    if (PS3_Video_Init() != 0)
+    {
+        PS3_Log("[6] FATAL: the RSX didn't start");
+        PS3_Exit(1);
+    }
+
+    PS3_Video_SetPerfLog(1);  // first builds: fps in the log
+
+    if (!FindGameData())
+    {
+        NoDataScreen();
+        PS3_Exit(0);
+    }
+
+    PS3_Log("[8] the engine starts");
+
+    engineSetupAllocator();
+    engineSetupLogging(argc, argv);
+
+    int const r = app_main(argc, argv);
+
+    PS3_Log("[8] app_main returned %d", r);
+    PS3_Exit(r);
+}
+
+static void GameThread(void *arg)
+{
+    UNREFERENCED_PARAMETER(arg);
+    GameMain();
+    sysThreadExit(0);
+}
+
+int main(int argc, char *argv[])
+{
+    UNREFERENCED_PARAMETER(argc);
+    UNREFERENCED_PARAMETER(argv);
+
+    sys_ppu_thread_t tid;
+    u64 code = 0;
+
+    PS3_LogInit();
+    PS3_Log("[0] main() reached (%s)", PS3_BUILD_DATE);
+
+    s32 const r = sysThreadCreate(&tid, GameThread, NULL, 1000, GAME_STACK_SIZE,
+                                  THREAD_JOINABLE, (char *)"dukegame");
+
+    if (r != 0)
+    {
+        PS3_Log("[0] FATAL: sysThreadCreate failed (%d)", (int)r);
+        PS3_LogShutdown();
+        return 1;
+    }
+
+    sysThreadJoin(tid, &code);
+
+    PS3_Exit((int)code);
+}

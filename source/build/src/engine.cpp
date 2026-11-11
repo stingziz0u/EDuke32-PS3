@@ -11859,7 +11859,7 @@ static void videoAllocateBuffers(void)
     ysavecnt = YSAVES;
     nodesperline = tabledivide32_noinline(YSAVES, ydim);
 
-#ifdef RENDERTYPESDL
+#if defined RENDERTYPESDL || defined RENDERTYPEPS3
     if (videoGetRenderMode() == REND_CLASSIC)
     {
 # ifdef USE_OPENGL
@@ -11984,7 +11984,7 @@ int32_t videoSetGameMode(char davidoption, int32_t daupscaledxdim, int32_t daups
     upscalefactor = max(1, min(tabledivide32(yres, 200), daupscalefactor));
     //POGOTODO: Polymost/Polymer could work with upscaling with a couple more changes
     int32_t scalefactor = upscalefactor;
-#ifdef RENDERTYPESDL
+#if defined RENDERTYPESDL || defined RENDERTYPEPS3
     if (bpp != 8)
 #endif
     {
@@ -14548,7 +14548,7 @@ void videoSet2dMode(char davidoption, int32_t daupscaledxdim, int32_t daupscaled
     daupscaledydim = max(480, min(daupscaledydim, max(480, daupscaledydim/daupscalefactor) * daupscalefactor));
     daupscalefactor = max(1, min(tabledivide32(daupscaledydim, 480), daupscalefactor));
 
-#ifndef RENDERTYPESDL
+#if !defined RENDERTYPESDL && !defined RENDERTYPEPS3
     daupscalefactor = 1;
 #endif
 

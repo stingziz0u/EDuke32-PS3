@@ -1,0 +1,93 @@
+/*
+ * Copyright (C) 2026 the EDuke32-PS3 contributors
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * =======================================================================
+ *
+ * PS3 (PSL1GHT) platform layer for EDuke32 -- shared declarations.
+ *
+ * The engine talks to the platform through the Build "render layer"
+ * contract (baselayer.h), implemented for the PS3 in ps3layer.cpp, and
+ * through the audiolib's sound driver table (driver_ps3.cpp). What it
+ * calls from the C library that has to behave differently here (paths,
+ * stdout/stderr, exit) is renamed in its objects to the PS3_* versions
+ * of ps3_stdio.c (ps3/Makefile, objcopy --redefine-sym).
+ *
+ * Everything lives in USRDIR: the game data the user copies by FTP, the
+ * config, the savegames and the log.
+ *
+ * =======================================================================
+ */
+
+#ifndef PS3_PLATFORM_H
+#define PS3_PLATFORM_H
+
+#include <stddef.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifndef PS3_APPID
+#define PS3_APPID "DUKE3DPS3"
+#endif
+
+#ifndef PS3_USRDIR
+#define PS3_USRDIR "/dev_hdd0/game/" PS3_APPID "/USRDIR"
+#endif
+
+#define PS3_LOGFILE     PS3_USRDIR "/eduke32-ps3.log"
+#define PS3_LOGFILE_OLD PS3_USRDIR "/eduke32-ps3.old.log"
+
+/* ps3_log.c */
+void PS3_LogInit(void);
+void PS3_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void PS3_LogRaw(const char *text);   /* as is, no newline added */
+void PS3_LogShutdown(void);
+
+/* ps3layer.cpp */
+void PS3_Pump(void);                 /* sysutil queue; cheap, call often */
+int  PS3_ExitRequested(void);        /* "Quit Game" from the XMB */
+void PS3_Exit(int code) __attribute__((noreturn));
+void PS3_FatalScreen(const char *title, const char *message);
+unsigned long long PS3_Micros(void);
+
+/* ps3_stdio.c: the engine's C library calls (see the top of this file) */
+int PS3_printf(const char *fmt, ...);
+int PS3_fprintf(FILE *f, const char *fmt, ...);
+int PS3_vfprintf(FILE *f, const char *fmt, va_list ap);
+int PS3_vprintf(const char *fmt, va_list ap);
+int PS3_puts(const char *s);
+int PS3_putchar(int c);
+int PS3_fputs(const char *s, FILE *f);
+int PS3_fputc(int c, FILE *f);
+int PS3_putc(int c, FILE *f);
+size_t PS3_fwrite(const void *p, size_t size, size_t n, FILE *f);
+int PS3_fflush(FILE *f);
+void PS3_perror(const char *s);
+void PS3_abort(void) __attribute__((noreturn));
+void PS3_exit(int code) __attribute__((noreturn));
+
+/* ps3_video.c */
+int  PS3_Video_Init(void);           /* 0 ok; idempotent */
+void PS3_Video_Shutdown(void);
+int  PS3_Video_Ready(void);
+void PS3_Video_SetFit(int percent);  /* share of the TV (overscan), 50..100 */
+void PS3_Video_SetFilter(int linear);
+void PS3_Video_SetPalette(const unsigned char *rgb);   /* 768 bytes */
+/* The 8 bit screen, w x h pixels (rows of w), shown at aw:ah; flips. */
+void PS3_Video_Present8(const unsigned char *pixels, int w, int h, int aw, int ah);
+void PS3_Video_TextScreen(const char *title, const char *const *lines, int nlines);
+void PS3_Video_SetPerfLog(int on);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

@@ -43,6 +43,10 @@
 # include "driver_alsa.h"
 #endif
 
+#ifdef RENDERTYPEPS3
+# include "driver_ps3.h"
+#endif
+
 int ASS_PCMSoundDriver  = ASS_AutoDetect;
 int ASS_MIDISoundDriver = ASS_AutoDetect;
 int ASS_EMIDICard = -1;
@@ -191,6 +195,24 @@ static struct
         ALSADrv_MIDI_Lock,
         ALSADrv_MIDI_Unlock,
         ALSADrv_MIDI_Service,
+    #else
+        UNSUPPORTED_COMPLETELY
+    #endif
+    },
+
+    // PS3 libaudio (ps3/source/driver_ps3.cpp)
+    {
+        "PS3",
+    #ifdef RENDERTYPEPS3
+        PS3Drv_GetError,
+        PS3Drv_ErrorString,
+        PS3Drv_PCM_Init,
+        PS3Drv_PCM_Shutdown,
+        PS3Drv_PCM_BeginPlayback,
+        PS3Drv_PCM_StopPlayback,
+        PS3Drv_PCM_Lock,
+        PS3Drv_PCM_Unlock,
+        UNSUPPORTED_MIDI,
     #else
         UNSUPPORTED_COMPLETELY
     #endif

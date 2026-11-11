@@ -101,10 +101,13 @@ int32_t g_Shareware = 0;
 // This was 32 for a while, but I think lowering it to 24 will help things like the Dingoo.
 // Ideally, we would look at our memory usage on our most cramped platform and figure out
 // how much of that is needed for the underlying OS and things like SDL instead of guessing
-#ifndef GEKKO
-int32_t MAXCACHE1DSIZE = (96*1024*1024);
-#else
+#if defined GEKKO
 int32_t MAXCACHE1DSIZE = (8*1024*1024);
+#elif defined __PPU__
+// PS3: about 213 MB for everything; the classic games' art is far smaller
+int32_t MAXCACHE1DSIZE = (48*1024*1024);
+#else
+int32_t MAXCACHE1DSIZE = (96*1024*1024);
 #endif
 
 int32_t tempwallptr;

@@ -1,0 +1,344 @@
+#----------------------------------------------------------------------------
+# EDuke32 on the PS3 (EDuke32 + PSL1GHT)
+#
+# From the root of the tree (~/EDuke32-PS3):
+#
+#   make -C ps3            -> ps3/eduke32-ps3-<version>.pkg
+#   make -C ps3 clean
+#   make -C ps3 verify     -> patch level of the tree and of the PKG
+#   make -C ps3 check-toolchain
+#
+# The engine and the game are EDuke32's own sources, untouched but for a
+# few #ifdef __PPU__ / RENDERTYPEPS3 lines. The PS3 side is ps3/source:
+#  - ps3layer.cpp is the Build "render layer" (sdlayer.cpp's job): boot,
+#    sysutil, video mode and frames on the RSX, the DualShock 3, message
+#    boxes, the clock, the ways out;
+#  - driver_ps3.cpp is the audiolib's PCM driver on libaudio;
+#  - ps3_gpu.c, ps3_video.c, ps3_pad.c, ps3_log.c: shared with the 8 bit
+#    ports (CrispyCell, ECellWolf, ROTT-PS3).
+#
+# What the engine calls from the C library that must behave differently
+# on the PS3 (exit, printf and friends, functions taking paths) is renamed
+# in its objects to the PS3_* versions (ps3/source/ps3_stdio.c), after
+# they are linked into one object (the ROTT-PS3 way).
+#
+# Packaging (.elf -> .self -> .pkg) is done by ppu_rules' own pattern rules
+# (strip + sprxlinker + sign + package_finalize). Never by hand.
+#----------------------------------------------------------------------------
+
+ifeq ($(strip $(PS3DEV)),)
+$(error PS3DEV is not set. Do: export PS3DEV=/usr/local/ps3dev)
+endif
+
+ifeq ($(strip $(PSL1GHT)),)
+export PSL1GHT := $(PS3DEV)
+endif
+
+include $(PS3DEV)/ppu_rules
+
+#----------------------------------------------------------------------------
+# Package identity
+#
+# APPID: EXACTLY 9 characters. ':=' and not '?=': ppu_rules sets
+# TITLE/APPID with '?=' BEFORE these lines (handoff notes 3.15, 3.16).
+#----------------------------------------------------------------------------
+
+VERSION    := 1.0
+PATCHLEVEL := $(shell cat $(CURDIR)/PATCHLEVEL 2>/dev/null || echo 0)
+TARGET     := eduke32-ps3
+TITLE      := EDuke32
+APPID      := DUKE3DPS3
+CONTENTID  := UP0001-$(APPID)_00-0000000000000000
+PKGFILES   := $(CURDIR)/pkgfiles
+ICON0      := $(CURDIR)/ICON0.PNG
+OUT_PKG    := eduke32-ps3-$(VERSION).pkg
+
+SRC        := $(abspath $(CURDIR)/..)
+ESRC       := $(SRC)/source
+OBJDIR     := $(CURDIR)/obj
+BUILDDIR   := $(CURDIR)/build
+
+CC         := ppu-gcc
+CXX        := ppu-g++
+LD         := ppu-g++
+PARTIALLD  := ppu-ld
+OBJCOPY    := ppu-objcopy
+
+BUILD_DATE := $(shell date +%Y-%m-%d)
+
+#----------------------------------------------------------------------------
+# Flags
+#----------------------------------------------------------------------------
+
+# EDuke32's own (GNUmakefile, release, no OpenGL / network / startup
+# window / FLAC), plus the PS3: big-endian, no SDL (RENDERTYPEPS3).
+COMMON := -O2 -funswitch-loops -fomit-frame-pointer -fno-strict-aliasing -fno-stack-protector
+COMMON += -funsigned-char -mcpu=cell $(MACHDEP)
+COMMON += -Wall -Wno-char-subscripts -Wno-missing-braces -Wno-attributes -Wno-strict-overflow
+COMMON += -Wno-unused-result -Wno-unknown-pragmas -Wno-format-truncation -Wno-stringop-overflow
+COMMON += -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable
+# PPU is LP64: a missing prototype truncates pointers to int. Hard errors
+# (handoff notes 3.26).
+COMMON += -Werror=implicit-function-declaration -Werror=int-conversion
+COMMON += -MMD -MP
+
+COMMON += -D_FORTIFY_SOURCE=0 -DNDEBUG -DNOASM -DNETCODE_DISABLE -DRENDERTYPEPS3=1
+COMMON += -DHAVE_VORBIS -DHAVE_XMP -D_GNU_SOURCE=1
+COMMON += -DB_LITTLE_ENDIAN=0 -DB_BIG_ENDIAN=1
+COMMON += -D__PS3__ -DPS3_APPID=\"$(APPID)\" -DPS3_BUILD_DATE=\"$(BUILD_DATE)\"
+COMMON += -DPS3_VERSION=\"$(VERSION)\" -DPS3_PATCHLEVEL=$(PATCHLEVEL)
+
+INCLUDES := -I$(ESRC)/build/include -I$(ESRC)/mact/include -I$(ESRC)/audiolib/include
+INCLUDES += -I$(ESRC)/libxmp-lite/include -I$(ESRC)/glad/include -I$(CURDIR)/source -I$(CURDIR)/compat
+INCLUDES += $(LIBPSL1GHT_INC)
+
+CFORCE   := -include $(CURDIR)/compat/ps3_compat.h
+
+CFLAGS   := -std=gnu11 $(COMMON) $(INCLUDES) $(CFORCE)
+CXXFLAGS := -std=gnu++14 -fno-exceptions -fno-rtti -fno-threadsafe-statics $(CXXFLAGS_INIT)
+CXXFLAGS += $(COMMON) $(INCLUDES) $(CFORCE)
+
+XMPFLAGS := -DHAVE_ROUND -DLIBXMP_CORE_PLAYER -DLIBXMP_NO_PROWIZARD -DLIBXMP_NO_DEPACKERS
+XMPFLAGS += -DBUILDING_STATIC -I$(ESRC)/libxmp-lite/include/libxmp-lite
+XMPFLAGS += -Wno-unused-parameter -Wno-sign-compare
+
+# The PS3 layer itself: plain C, warnings as in the other ports.
+PCFLAGS  := -O2 -std=gnu99 -Wall -fno-strict-aliasing -fno-common -mcpu=cell $(MACHDEP)
+PCFLAGS  += -Werror=implicit-function-declaration -Werror=int-conversion -MMD -MP
+PCFLAGS  += -DPS3_APPID=\"$(APPID)\" -DPS3_BUILD_DATE=\"$(BUILD_DATE)\"
+PCFLAGS  += -I$(CURDIR)/source $(LIBPSL1GHT_INC)
+
+# -lrt and -llv2 are MANDATORY: without them the binary links cleanly, the
+# PKG installs, and it never reaches main(). Black screen, back to the XMB,
+# no log at all (handoff notes 3.1).
+# (net: only to resolve the old networking code in mmulti.cpp, which the
+# port never calls -- no network play)
+LIBS := gcm_sys rsx sysutil io audio net sysmodule rt lv2 m
+
+#----------------------------------------------------------------------------
+# Sources (as GNUmakefile builds eduke32 with RENDERTYPE=SDL, minus the
+# SDL layer and driver, ALSA and FLAC)
+#----------------------------------------------------------------------------
+
+# (no enet.cpp: no network play)
+BUILD_CPP := 2d a-c baselayer cache1d clip colmatch common communityapi compat cpuid \
+	crc32 defs dxtfilter engine fix16 hash hightile klzw kplib loguru md4 mhk \
+	mmulti mutex osd palette pngwrite pragmas rev screenshot screentext scriptfile \
+	sjson smalltextfont smmalloc smmalloc_generic smmalloc_tls softsurface texcache \
+	textfont tiles timer vfs
+BUILD_C   := lz4 miniz miniz_tdef miniz_tinfl xxhash
+
+DUKE_CPP  := actors anim cheats cmdline common config demo dnames game gamedef \
+	gameexec gamestructures gamevars global grpscan input menus network osdcmds \
+	osdfuncs player premap rts savegame sbar screens sector sounds text
+
+AUDIO_CPP := driver_adlib driver_sf2 drivers flac formats fx_man gmtimbre midi mix \
+	mixst multivoc music opl3 pitch vorbis xa xmp
+
+MACT_CPP  := animlib control joystick keyboard scriplib
+
+XMP_C     := common control dataio effects filter format hio it_load itsex lfo load \
+	load_helpers memio mix_all mixer mod_load mtm_load period player read_event \
+	s3m_load sample scan smix virtual win32 xm_load
+
+# The PS3 pieces that are part of the game (renamed with the engine):
+# what the layer asks of Duke.
+GAMEPS3_CPP := ps3_game_duke3d
+
+ENGINE_OBJS := \
+	$(patsubst %,$(OBJDIR)/build/%.o,$(BUILD_CPP) $(BUILD_C)) \
+	$(patsubst %,$(OBJDIR)/duke3d/%.o,$(DUKE_CPP)) \
+	$(patsubst %,$(OBJDIR)/audiolib/%.o,$(AUDIO_CPP)) \
+	$(patsubst %,$(OBJDIR)/mact/%.o,$(MACT_CPP)) \
+	$(patsubst %,$(OBJDIR)/libxmp/%.o,$(XMP_C)) \
+	$(patsubst %,$(OBJDIR)/gameps3/%.o,$(GAMEPS3_CPP))
+
+# The PS3 layer: talks to the engine (its headers) but calls the real C
+# library (not renamed).
+LAYER_CPP := ps3layer driver_ps3
+LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_gpu ps3_video
+
+LAYER_OBJS := $(patsubst %,$(OBJDIR)/ps3/%.o,$(LAYER_CPP) $(LAYER_C))
+
+# The C library calls the engine makes that go to the PS3 versions.
+REDEFINE := exit abort printf fprintf vfprintf vprintf puts putchar fputs fputc \
+	putc fwrite fflush perror open fopen stat access mkdir opendir remove \
+	unlink rename getcwd chdir
+REDEFINE_FLAGS := $(foreach s,$(REDEFINE),--redefine-sym $(s)=PS3_$(s))
+
+# The file that talks to GCM goes at -O1 -fno-inline: PSL1GHT's syscall
+# stubs don't survive aggressive inlining (handoff notes 4.2).
+$(OBJDIR)/ps3/ps3_gpu.o: PCFLAGS := $(filter-out -O2,$(PCFLAGS)) -O1 -fno-inline
+
+# The TOC (handoff notes 3.100): ppu-gcc 7.2 has no -mcmodel, the TOC
+# holds 64 KB and the link must not split it (--no-multi-toc: a split TOC
+# means r2off stubs, and a crash at boot). Everything that runs at load
+# time, in the menus or in the console goes through -mminimal-toc (one
+# TOC entry per file); the renderer, the game's VM and the per-tic game
+# logic keep direct TOC access. 'make check' (after every link) fails the
+# build if .got reaches 0x10000 or any r2off stub shows up.
+MINTOC_OBJS := \
+	$(patsubst %,$(OBJDIR)/duke3d/%.o,menus osdcmds osdfuncs config cmdline grpscan \
+		savegame demo anim premap rts gamedef global cheats network dnames common) \
+	$(patsubst %,$(OBJDIR)/build/%.o,defs osd loguru kplib compat scriptfile common \
+		baselayer mhk md4 hightile sjson cache1d colmatch pngwrite screenshot crc32 \
+		communityapi cpuid rev smmalloc smmalloc_generic smmalloc_tls texcache \
+		dxtfilter klzw lz4 miniz miniz_tdef miniz_tinfl xxhash) \
+	$(patsubst %,$(OBJDIR)/audiolib/%.o,vorbis xmp formats xa flac midi music \
+		driver_sf2 gmtimbre drivers fx_man) \
+	$(patsubst %,$(OBJDIR)/mact/%.o,scriplib animlib) \
+	$(patsubst %,$(OBJDIR)/libxmp/%.o,$(XMP_C))
+
+$(MINTOC_OBJS): CFLAGS += -mminimal-toc
+$(MINTOC_OBJS): CXXFLAGS += -mminimal-toc
+
+# The logger: std::recursive_mutex and friends on lv2 (no std threads on
+# the PPU), no pthreads, no stack traces.
+$(OBJDIR)/build/loguru.o: CXXFLAGS += -include $(CURDIR)/compat/ps3_threads.h \
+	-DLOGURU_PTHREADS=0 -DLOGURU_WINTHREADS=0 -DLOGURU_STACKTRACES=0
+
+# The build's name in the engine's log and console
+$(OBJDIR)/build/rev.o: CXXFLAGS += -DREV=r10669-PS3-p$(PATCHLEVEL)
+
+#----------------------------------------------------------------------------
+# Rules
+#----------------------------------------------------------------------------
+
+.PHONY: all clean check verify check-toolchain pkgdirs FORCE
+
+all: $(TARGET).pkg
+	@cp $(TARGET).gnpdrm.pkg $(OUT_PKG)
+	@echo ""
+	@echo "PKG to install: $(CURDIR)/$(OUT_PKG)  (patch level $(PATCHLEVEL))"
+	@ls -la $(OUT_PKG)
+
+$(OBJDIR)/build/%.o: $(ESRC)/build/src/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX build/$*.cpp"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/build/%.o: $(ESRC)/build/src/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  build/$*.c"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/duke3d/%.o: $(ESRC)/duke3d/src/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX duke3d/$*.cpp"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/audiolib/%.o: $(ESRC)/audiolib/src/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX audiolib/$*.cpp"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/mact/%.o: $(ESRC)/mact/src/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX mact/$*.cpp"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/libxmp/%.o: $(ESRC)/libxmp-lite/src/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  libxmp-lite/$*.c"
+	@$(CC) $(CFLAGS) $(XMPFLAGS) -c $< -o $@
+
+$(OBJDIR)/gameps3/%.o: $(CURDIR)/source/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX ps3/$*.cpp (game)"
+	@$(CXX) $(CXXFLAGS) -I$(ESRC)/duke3d/src -c $< -o $@
+
+$(OBJDIR)/ps3/%.o: $(CURDIR)/source/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX ps3/$*.cpp"
+	@$(CXX) $(CXXFLAGS) -I$(ESRC)/build/src -c $< -o $@
+
+$(OBJDIR)/ps3/%.o: $(CURDIR)/source/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  ps3/$*.c"
+	@$(CC) $(PCFLAGS) -c $< -o $@
+
+# The engine and the game in one object, the C library calls renamed.
+$(OBJDIR)/engine.o: $(ENGINE_OBJS)
+	@echo "LD  engine.o (C library calls -> PS3_*)"
+	@$(PARTIALLD) -r -o $(OBJDIR)/engine_all.o $(ENGINE_OBJS)
+	@$(OBJCOPY) $(REDEFINE_FLAGS) $(OBJDIR)/engine_all.o $@
+
+$(TARGET).elf: $(OBJDIR)/engine.o $(LAYER_OBJS)
+	@echo "LD  $@"
+	@$(LD) $(MACHDEP) -Wl,--no-multi-toc $^ $(LIBPSL1GHT_LIB) -o $@.tmp $(foreach lib,$(LIBS),-l$(lib))
+	@$(MAKE) --no-print-directory check ELF=$@.tmp
+	@mv -f $@.tmp $@
+
+-include $(ENGINE_OBJS:.o=.d) $(LAYER_OBJS:.o=.d)
+
+#----------------------------------------------------------------------------
+# PKG contents and icon
+#
+# pkgfiles/ mirrors the PKG, not its USRDIR. VERSION.TXT is always written
+# (it tells which build is installed). Game data is NOT packaged: it goes
+# by FTP into USRDIR.
+#----------------------------------------------------------------------------
+
+$(PKGFILES)/USRDIR/VERSION.TXT: FORCE
+	@mkdir -p $(PKGFILES)/USRDIR
+	@echo "$(TITLE) -- eduke32-ps3 $(VERSION) -- patch $(PATCHLEVEL) -- $(BUILD_DATE)" > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+$(ICON0):
+	@echo "No ICON0.PNG, generating a 320x176 placeholder..."
+	@python3 -c "import zlib,struct;w,h=320,176;\
+rows=b''.join(b'\x00'+bytes([120,24,8,255])*w for _ in range(h));\
+png=lambda t,d:struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d));\
+open('$(ICON0)','wb').write(b'\x89PNG\r\n\x1a\n'+png(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+png(b'IDAT',zlib.compress(rows))+png(b'IEND',b''))"
+
+# The folders the user fills. Created at build time: they are empty, and
+# neither git nor a patch keeps empty folders. None yet: the game data goes
+# straight into USRDIR.
+PKG_DIRS :=
+
+pkgdirs:
+	@for d in $(PKG_DIRS); do mkdir -p "$(PKGFILES)/$$d"; done
+
+$(TARGET).pkg: $(PKGFILES)/USRDIR/VERSION.TXT $(ICON0) | pkgdirs
+
+#----------------------------------------------------------------------------
+# Diagnostics
+#----------------------------------------------------------------------------
+
+# The TOC (see MINTOC_OBJS above).
+ELF ?= $(TARGET).elf
+check:
+	@got=`ppu-readelf -SW $(ELF) | awk '$$2==".got"{print $$6}'`; \
+	 stubs=`ppu-nm $(ELF) | grep -c r2off`; \
+	 echo "TOC check: .got = 0x$$got bytes (limit 0x10000), r2off stubs = $$stubs"; \
+	 if [ $$((0x$$got)) -ge 65536 ] || [ $$stubs -ne 0 ]; then \
+	   echo "TOC check FAILED: move more objects to MINTOC_OBJS"; rm -f $(ELF); exit 1; fi
+
+verify:
+	@echo "tree patch level: $(PATCHLEVEL)"
+	@if [ -f $(PKGFILES)/USRDIR/VERSION.TXT ]; then \
+	   echo "PKG contents    : `cat $(PKGFILES)/USRDIR/VERSION.TXT`"; \
+	 else echo "PKG contents    : (not built yet)"; fi
+	@if [ -f $(OUT_PKG) ]; then ls -la $(OUT_PKG); fi
+
+check-toolchain:
+	@echo "PS3DEV   = $(PS3DEV)"
+	@echo "ppu_rules: `test -f $(PS3DEV)/ppu_rules && echo OK || echo MISSING`"
+	@$(CC) --version | head -1
+	@echo "APPID    = $(APPID)  (length: `printf '%s' '$(APPID)' | wc -c`, MUST be 9)"
+	@echo "TITLE    = $(TITLE)"
+	@for l in $(LIBS); do \
+	   if [ -f "$(PS3DEV)/ppu/lib/lib$$l.a" ] || [ -f "$(PSL1GHT)/ppu/lib/lib$$l.a" ]; then \
+	     printf "  OK      lib%s.a\n" "$$l"; \
+	   elif $(CC) -print-file-name=lib$$l.a | grep -q /; then \
+	     printf "  OK      lib%s.a (gcc sysroot)\n" "$$l"; \
+	   else \
+	     printf "  MISSING lib%s.a\n" "$$l"; \
+	   fi; \
+	 done
+
+clean:
+	rm -rf $(OBJDIR) $(BUILDDIR)
+	rm -f $(TARGET).elf $(TARGET).self $(TARGET).fake.self
+	rm -f $(PKGFILES)/USRDIR/VERSION.TXT
+	@echo "clean (the .pkg is left alone: ppu_rules rebuilds it)"
