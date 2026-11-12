@@ -550,6 +550,29 @@ static int StickAxis(int v)
     return clamp(a, -32768, 32767);
 }
 
+// The pad behaves as SDL's events do, not as a state copied every poll:
+// a button's bit is set when it goes down and cleared when it comes up,
+// an axis is written when it moves. The game "eats" a press by clearing
+// joystick.bits (JOYSTICK_ClearAllButtons): with the button still held,
+// it must stay eaten until released. Copying the whole state each poll
+// brought it back on the next frame -- START opened the menu and the
+// still-held START closed it again a few frames later.
+static int32_t pad_lastbits;
+static int32_t pad_lastaxis[PADAXIS_COUNT];
+
+static void PadReleaseAll(void)
+{
+    joystick.bits = 0;
+    pad_lastbits = 0;
+
+    for (int i = 0; i < PADAXIS_COUNT; i++)
+    {
+        if (i < joystick.numAxes)
+            joystick.pAxis[i] = 0;
+        pad_lastaxis[i] = 0;
+    }
+}
+
 static void PollPad(void)
 {
     ps3_padstate_t st;
@@ -561,9 +584,7 @@ static void PollPad(void)
 
     if (!st.connected)
     {
-        joystick.bits = 0;
-        for (int i = 0; i < joystick.numAxes; i++)
-            joystick.pAxis[i] = 0;
+        PadReleaseAll();
         return;
     }
 
@@ -576,14 +597,27 @@ static void PollPad(void)
         if (st.buttons & m.ps3)
             bits |= 1 << m.button;
 
-    joystick.bits = bits;
+    int32_t const pressed  = bits & ~pad_lastbits;
+    int32_t const released = pad_lastbits & ~bits;
 
-    joystick.pAxis[PADAXIS_LEFTX]  = StickAxis(st.lx);
-    joystick.pAxis[PADAXIS_LEFTY]  = StickAxis(st.ly);
-    joystick.pAxis[PADAXIS_RIGHTX] = StickAxis(st.rx);
-    joystick.pAxis[PADAXIS_RIGHTY] = StickAxis(st.ry);
-    joystick.pAxis[PADAXIS_TRIGGERLEFT]  = (st.buttons & PS3_PAD_L2) ? 32767 : 0;
-    joystick.pAxis[PADAXIS_TRIGGERRIGHT] = (st.buttons & PS3_PAD_R2) ? 32767 : 0;
+    joystick.bits = (joystick.bits | pressed) & ~released;
+    pad_lastbits = bits;
+
+    int32_t axis[PADAXIS_COUNT];
+
+    axis[PADAXIS_LEFTX]  = StickAxis(st.lx);
+    axis[PADAXIS_LEFTY]  = StickAxis(st.ly);
+    axis[PADAXIS_RIGHTX] = StickAxis(st.rx);
+    axis[PADAXIS_RIGHTY] = StickAxis(st.ry);
+    axis[PADAXIS_TRIGGERLEFT]  = (st.buttons & PS3_PAD_L2) ? 32767 : 0;
+    axis[PADAXIS_TRIGGERRIGHT] = (st.buttons & PS3_PAD_R2) ? 32767 : 0;
+
+    for (int i = 0; i < PADAXIS_COUNT; i++)
+        if (axis[i] != pad_lastaxis[i])
+        {
+            joystick.pAxis[i] = axis[i];
+            pad_lastaxis[i] = axis[i];
+        }
 }
 
 void joyScanDevices()
