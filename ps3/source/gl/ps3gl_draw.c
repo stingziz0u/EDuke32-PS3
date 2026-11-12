@@ -384,6 +384,45 @@ RingAlloc(uint32_t bytes, ps3gl_vertex_t **out, uint32_t *offset)
 	return 1;
 }
 
+/* Every element first..first+count-1 of the array must be inside its
+   buffer object (or, without one, at a real address): otherwise the draw
+   is dropped and logged, not a crash. */
+static int
+ArrayOk(const char *what, const ps3gl_array_t *a, int first, int count)
+{
+	static int logged;
+	uintptr_t start = (uintptr_t)a->ptr;
+	long size = -2;
+	int stride = Stride(a);
+	uintptr_t end = start + (uintptr_t)(first + count - 1) * (uintptr_t)stride +
+		(uintptr_t)a->size * (uintptr_t)TypeSize(a->type);
+
+	if (a->vbo)
+	{
+		size = ps3gl_buffer_size(a->vbo);
+
+		if (size >= 0 && end <= (uintptr_t)size)
+		{
+			return 1;
+		}
+	}
+	else if (start >= 0x10000)
+	{
+		return 1;
+	}
+
+	if (logged < 12)
+	{
+		PS3_Log("[gl] WARNING: draw dropped, %s array outside its storage: buffer %u "
+				"(%ld bytes), offset %lu, stride %d, %d x %d, elements %d..%d",
+				what, (unsigned)a->vbo, size, (unsigned long)start, stride, a->size,
+				TypeSize(a->type), first, first + count - 1);
+		logged++;
+	}
+
+	return 0;
+}
+
 /* Copies vertices first..first+count-1 into the ring and gives the RSX
    offset of the copy. 0 if the ring segment is full. Texture coordinates
    are only read for the units the fragment program samples: an array
@@ -405,10 +444,25 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 	uint32_t color = ps3gl.color;
 	int fast, i;
 
+	if (!ArrayOk("vertex", va, first, count) ||
+		(vc && !ArrayOk("color", vc, first, count)) ||
+		(vt0 && !ArrayOk("texcoord 0", vt0, first, count)) ||
+		(vt1 && !ArrayOk("texcoord 1", vt1, first, count)))
+	{
+		ps3gl.st_dropped++;
+		return 0;
+	}
+
 	if (!RingAlloc(bytes, &out, ring_offset))
 	{
 		return 0;
 	}
+
+	/* the last draws' numbers, in the log if the game thread dies */
+	PS3_Crumb("cv first", first);
+	PS3_Crumb("cv count", count);
+	PS3_Crumb("cv out", (int)(uintptr_t)out);
+	PS3_Crumb("cv vbo", (int)(va->vbo | ((vt0 ? vt0->vbo : 0xffff) << 16)));
 
 	sv = Stride(va);
 	pv = ArrayPtr(va);
@@ -437,6 +491,9 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		st1 = Stride(vt1);
 		pt1 += (size_t)first * st1;
 	}
+
+	PS3_Crumb("cv pv", (int)(uintptr_t)pv);
+	PS3_Crumb("cv pt0", (int)(uintptr_t)pt0);
 
 	/* the usual case: float positions, float texcoords, byte colors */
 	fast = (va->type == GL_FLOAT) &&

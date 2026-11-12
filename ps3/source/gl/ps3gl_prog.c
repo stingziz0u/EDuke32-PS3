@@ -733,6 +733,15 @@ ps3gl_buffer_ptr(GLuint vbo, const void *offset)
 	return b->data + (uintptr_t)offset;
 }
 
+/* bytes in buffer object vbo, -1 if there is no such buffer */
+long
+ps3gl_buffer_size(GLuint vbo)
+{
+	buffer_t *b = Buffer(vbo);
+
+	return (b && b->data) ? (long)b->size : -1;
+}
+
 const void *
 ps3gl_element_ptr(const void *indices)
 {
@@ -854,6 +863,17 @@ glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
 	}
 
 	b->size = (size_t)size;
+
+	{
+		static int logged;
+
+		if (logged < 16)
+		{
+			PS3_Log("[gl] buffer %u (target 0x%x): %ld bytes%s", (unsigned)*Binding(target),
+					(unsigned)target, (long)size, data ? "" : " (no data)");
+			logged++;
+		}
+	}
 
 	if (data && size)
 	{

@@ -528,6 +528,14 @@ glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width,
 	(void)internalFormat;
 	(void)border;
 
+	/* GL_UNSIGNED_INT_8_8_8_8 on a big endian CPU: the first component
+	   in the first byte, the same as GL_UNSIGNED_BYTE (EDuke32's 32 bit
+	   textures, GL_BGRA) */
+	if (type == 0x8035)
+	{
+		type = GL_UNSIGNED_BYTE;
+	}
+
 	if (!t || level < 0 || width <= 0 || height <= 0 || width > 4096 || height > 4096)
 	{
 		return;
@@ -642,6 +650,11 @@ glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 	ps3gl_texture_t *t = Bound();
 
 	(void)target;
+
+	if (type == 0x8035)   /* GL_UNSIGNED_INT_8_8_8_8, see glTexImage2D */
+	{
+		type = GL_UNSIGNED_BYTE;
+	}
 
 	if (!t || !t->data || !pixels || type != GL_UNSIGNED_BYTE ||
 		level < 0 || level >= t->num_levels)
