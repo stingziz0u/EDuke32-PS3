@@ -307,5 +307,6 @@ void     ps3gl_prog_apply(void);     /* Polymost's programs and constants */
 const void *ps3gl_buffer_ptr(GLuint vbo, const void *offset);
 const void *ps3gl_element_ptr(const void *indices);
 long     ps3gl_buffer_size(GLuint vbo);
+extern int ps3gl_sample;   /* sample draw logging, see ps3gl_draw.c */
 
 #endif /* PS3GL_H */

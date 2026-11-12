@@ -110,6 +110,8 @@ static const char *const view_names[PS3GL_POLYMOST_VIEWS] = {
 	"7: shade (red), shade table index (green), palswap size (blue)",
 };
 
+int ps3gl_sample;   /* > 0: this many more draws are logged (ps3gl_draw.c) */
+
 void
 PS3GL_SetPolymostView(int view)
 {
@@ -674,6 +676,34 @@ ps3gl_prog_apply(void)
 			p->u[U_NPOTEMULATION][2], p->u[U_COLORCORRECTION][1]);
 	Set4(k[15], ps3gl.fog_color[0], ps3gl.fog_color[1], ps3gl.fog_color[2],
 			p->u[U_COLORCORRECTION][2]);
+
+	/* sample draws (ps3gl_sample, set by PS3GL_BeginFrame every 10 s):
+	   the numbers the shaders get, as Polymost set them */
+	if (ps3gl_sample > 0)
+	{
+		PS3_Log("[sample] frame %u prog %u: tex0 %d (%dx%d %s) | uniforms texPosSize %g %g %g %g "
+				"halfTexel %g %g clamp %g %g palswapPos %g %g palswapSize %g %g shade %g "
+				"numShades %g %g visFactor %g fog %g colorOnly %g usePalette %g shadeInterp %g "
+				"npot %g %g %g %g cc %g %g %g",
+				(unsigned)ps3gl.frame, (unsigned)ps3gl.program, ps3gl.tmu[0].tex,
+				ps3gl.textures[ps3gl.tmu[0].tex].width, ps3gl.textures[ps3gl.tmu[0].tex].height,
+				ps3gl.textures[ps3gl.tmu[0].tex].swizzled ? "swz" : "lin",
+				p->u[U_TEXTUREPOSSIZE][0], p->u[U_TEXTUREPOSSIZE][1], p->u[U_TEXTUREPOSSIZE][2],
+				p->u[U_TEXTUREPOSSIZE][3], p->u[U_HALFTEXELSIZE][0], p->u[U_HALFTEXELSIZE][1],
+				p->u[U_CLAMP][0], p->u[U_CLAMP][1], p->u[U_PALSWAPPOS][0], p->u[U_PALSWAPPOS][1],
+				p->u[U_PALSWAPSIZE][0], p->u[U_PALSWAPSIZE][1], p->u[U_SHADE][0],
+				p->u[U_NUMSHADES][0], p->u[U_NUMSHADES][1], p->u[U_VISFACTOR][0],
+				p->u[U_FOGENABLED][0], p->u[U_USECOLORONLY][0], p->u[U_USEPALETTE][0],
+				p->u[U_SHADEINTERPOLATE][0], p->u[U_NPOTEMULATION][0], p->u[U_NPOTEMULATION][1],
+				p->u[U_NPOTEMULATION][2], p->u[U_NPOTEMULATION][3], p->u[U_COLORCORRECTION][0],
+				p->u[U_COLORCORRECTION][1], p->u[U_COLORCORRECTION][2]);
+		PS3_Log("[sample]   consts k9 %g %g %g %g k10 %g %g %g %g k11 %g %g %g %g k12 %g %g %g %g "
+				"k13 %g %g %g %g k8(fog) %g %g %g; tex rows %g %g %g %g / %g %g %g %g",
+				k[9][0], k[9][1], k[9][2], k[9][3], k[10][0], k[10][1], k[10][2], k[10][3],
+				k[11][0], k[11][1], k[11][2], k[11][3], k[12][0], k[12][1], k[12][2], k[12][3],
+				k[13][0], k[13][1], k[13][2], k[13][3], k[8][0], k[8][1], k[8][2],
+				k[6][0], k[6][1], k[6][2], k[6][3], k[7][0], k[7][1], k[7][2], k[7][3]);
+	}
 
 	/* only what changed since the last draw */
 	first = 0;

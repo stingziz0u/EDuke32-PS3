@@ -694,6 +694,21 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 	}
 
 	memcpy(ring_out, cv_buf, (size_t)count * PS3GL_VERTEX_SIZE);
+
+	if (ps3gl_sample > 0)
+	{
+		int n = count < 4 ? count : 4;
+
+		for (i = 0; i < n; i++)
+		{
+			PS3_Log("[sample]   vertex %d: pos %g %g %g  tc %g %g  color %08x", i,
+					cv_buf[i].x, cv_buf[i].y, cv_buf[i].z, cv_buf[i].u0, cv_buf[i].v0,
+					(unsigned)cv_buf[i].color);
+		}
+
+		ps3gl_sample--;
+	}
+
 	return 1;
 }
 

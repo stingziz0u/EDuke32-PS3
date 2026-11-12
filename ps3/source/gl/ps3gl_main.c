@@ -282,6 +282,17 @@ PS3GL_BeginFrame(void)
 	}
 
 	ps3gl_process_frees();
+
+	/* every 10 s (a level running at 60 fps), a few draws of the frame
+	   are logged with what the shaders get */
+	if (ps3gl.frame % 600 == 300)
+	{
+		ps3gl_sample = 12;
+	}
+	else
+	{
+		ps3gl_sample = 0;
+	}
 }
 
 void

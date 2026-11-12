@@ -662,6 +662,20 @@ glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 		return;
 	}
 
+	{
+		static int logged;
+
+		if (logged < 40 && t->width >= 1024)
+		{
+			const uint8_t *px = (const uint8_t *)pixels;
+
+			PS3_Log("[gl] tilesheet %d: %dx%d at %d,%d (format 0x%x), first texels %u %u %u %u",
+					ps3gl.tmu[ps3gl.active_tmu].tex, width, height, xoffset, yoffset,
+					(unsigned)format, px[0], px[1], px[2], px[3]);
+			logged++;
+		}
+	}
+
 	Upload(t, level, xoffset, yoffset, width, height, format, (const uint8_t *)pixels);
 }
 
