@@ -12,7 +12,7 @@
  *   thread's stack goes into a ring of 262144 events. The dump rebuilds
  *   the calls still open when the thread died -- the stack at the crash,
  *   innermost last -- plus the last 256 raw events.
- * - crumbs: PS3_Crumb(tag, value), the last 64.
+ * - crumbs: PS3_Crumb(tag, value), the last 256.
  *
  * The addresses are function descriptors (.opd) and return addresses:
  * ps3/tools/crashaddr.py names them from the build's ELF.
@@ -27,7 +27,7 @@
 
 #define NO_TRACE __attribute__((no_instrument_function))
 
-#define NCRUMBS     64
+#define NCRUMBS     256
 #define NFTRACE     262144      /* power of two */
 
 typedef struct

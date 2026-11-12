@@ -1611,14 +1611,15 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    sysThreadJoin(tid, &code);
+    s32 const jr = sysThreadJoin(tid, &code);
 
     // Every normal way out ends the process from the game thread itself
     // (PS3_Exit): coming back here means it died. Its trail to the log.
     {
         char why[64];
-        snprintf(why, sizeof(why), "the game thread died (exit code %d)", (int)code);
+        snprintf(why, sizeof(why), "the game thread died (exit code %d, join %d)", (int)code, (int)jr);
         PS3_Debug_Dump(why);
+        PS3_Video_DebugState();
     }
 
     PS3_Exit((int)code);

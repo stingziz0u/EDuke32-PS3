@@ -51,6 +51,96 @@ static struct {
 } fps[PS3GL_FP_COUNT];
 
 /* ================================================================ */
+/* Debug: the first draws, one by one                                 */
+/* ================================================================ */
+
+/*
+ * The first DEBUG_SYNC_DRAWS draws are logged before they're built (what
+ * is bound, every texture descriptor), and the RSX is waited for between
+ * the steps of each (states, textures, program, vertices, draw), with a
+ * crumb after every step: a game thread that dies leaves the step in the
+ * crash dump, an RSX that stops leaves "didn't finish in time" in the log
+ * after the last step it finished.
+ */
+#define DEBUG_SYNC_DRAWS 300
+static int debug_draws;
+
+static int
+Debugging(void)
+{
+	return debug_draws < DEBUG_SYNC_DRAWS;
+}
+
+static void
+DebugStep(const char *step)
+{
+	if (!Debugging())
+	{
+		return;
+	}
+
+	PS3_Crumb(step, debug_draws);
+	PS3_Video_Finish();
+	PS3_Crumb("  rsx idle", debug_draws);
+}
+
+static void
+DebugBegin(const char *what, int count)
+{
+	int i;
+
+	if (!Debugging())
+	{
+		return;
+	}
+
+	PS3_Log("[gl] draw %d (frame %u): %s, %s, %d verts, active fp %d, vp %d, ring head %u",
+			debug_draws, (unsigned)ps3gl.frame, what,
+			ps3gl.program_polymost ? "Polymost program" : "fixed function", count,
+			ps3gl.active_fp, ps3gl.vp_loaded, (unsigned)ps3gl.ring_head);
+	PS3_Log("[gl]   arrays: vertex %s %d x 0x%x stride %d vbo %u ptr %p; color %s; tc0 %s %d x 0x%x "
+			"stride %d vbo %u ptr %p; tc1 %s; element buffer %u",
+			ps3gl.va_vertex.enabled ? "on" : "off", ps3gl.va_vertex.size,
+			(unsigned)ps3gl.va_vertex.type, ps3gl.va_vertex.stride, (unsigned)ps3gl.va_vertex.vbo,
+			ps3gl.va_vertex.ptr, ps3gl.va_color.enabled ? "ON" : "off",
+			ps3gl.va_texcoord[0].enabled ? "on" : "off", ps3gl.va_texcoord[0].size,
+			(unsigned)ps3gl.va_texcoord[0].type, ps3gl.va_texcoord[0].stride,
+			(unsigned)ps3gl.va_texcoord[0].vbo, ps3gl.va_texcoord[0].ptr,
+			ps3gl.va_texcoord[1].enabled ? "ON" : "off", (unsigned)ps3gl.element_buffer);
+
+	for (i = 0; i < PS3GL_MAX_TMUS; i++)
+	{
+		const ps3gl_tmu_t *t = &ps3gl.tmu[i];
+		const ps3gl_texture_t *x = &ps3gl.textures[t->tex];
+
+		PS3_Log("[gl]   unit %d: tex %d %s, %dx%d %s, %d/%d levels, data %p offset %08x size %u, "
+				"pitch %u, filter %x/%x, wrap %x/%x, desc fmt %02x mip %u %ux%u pitch %u off %08x",
+				i, t->tex, t->enabled ? "enabled" : "disabled", x->width, x->height,
+				x->swizzled ? "swizzled" : "linear", x->num_levels, x->max_levels,
+				(void *)x->data, (unsigned)x->offset, (unsigned)x->size, (unsigned)x->pitch,
+				(unsigned)x->min_filter, (unsigned)x->mag_filter, (unsigned)x->wrap_s,
+				(unsigned)x->wrap_t, (unsigned)x->gt.format, (unsigned)x->gt.mipmap,
+				(unsigned)x->gt.width, (unsigned)x->gt.height, (unsigned)x->gt.pitch,
+				(unsigned)x->gt.offset);
+	}
+
+	DebugStep("draw begin");
+}
+
+static void
+DebugEnd(void)
+{
+	if (!Debugging())
+	{
+		return;
+	}
+
+	DebugStep("draw issued");
+	PS3_Log("[gl] draw %d done", debug_draws);
+	debug_draws++;
+}
+
+/* ================================================================ */
 /* Shaders                                                            */
 /* ================================================================ */
 
@@ -513,8 +603,15 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		(!pt1 || (vt1->type == GL_FLOAT && vt1->size >= 2)) &&
 		(!pc || (vc->type == GL_UNSIGNED_BYTE && vc->size == 4));
 
+	PS3_Crumb(fast ? "cv loop fast" : "cv loop slow", count);
+
 	for (i = 0; i < count; i++, out++)
 	{
+		if (debug_draws < DEBUG_SYNC_DRAWS)
+		{
+			PS3_Crumb("cv vertex", i);
+		}
+
 		if (fast)
 		{
 			const float *p = (const float *)pv;
@@ -600,6 +697,7 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		pv += sv;
 	}
 
+	PS3_Crumb("cv loop done", count);
 	return 1;
 }
 
@@ -616,43 +714,6 @@ BindRing(uint32_t off)
 			PS3GL_VERTEX_SIZE, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
 	rsxBindVertexArrayAttrib(ctx, GCM_VERTEX_ATTRIB_COLOR0, 0, off + PS3GL_VATTR_COLOR_OFF,
 			PS3GL_VERTEX_SIZE, 4, GCM_VERTEX_DATA_TYPE_U8, GCM_LOCATION_RSX);
-}
-
-/* The first draws after start (and after a mode change) are waited for,
-   one by one, and logged: an RSX that faults on one shows which, with
-   what was bound. A dead RSX then kills the game thread on its next write
-   to RSX memory, so the line without "done" is the culprit. */
-#define DEBUG_SYNC_DRAWS 300
-static int debug_draws;
-
-static void
-DebugDraw(const char *what, uint32_t prim, int count)
-{
-	char tex[160];
-	int i, len = 0;
-
-	if (debug_draws >= DEBUG_SYNC_DRAWS)
-	{
-		return;
-	}
-
-	for (i = 0; i < 3; i++)
-	{
-		const ps3gl_tmu_t *t = &ps3gl.tmu[i];
-		const ps3gl_texture_t *x = &ps3gl.textures[t->tex];
-
-		len += snprintf(tex + len, sizeof(tex) - (size_t)len, " u%d:%d %dx%d%s/%d@%08x", i,
-				t->tex, x->width, x->height, x->swizzled ? "s" : "l", x->num_levels,
-				(unsigned)x->offset);
-	}
-
-	PS3_Log("[gl] draw %d (frame %u): %s, %s, prim %u, %d verts, fp %d;%s", debug_draws,
-			(unsigned)ps3gl.frame, what, ps3gl.program_polymost ? "Polymost program" :
-			"fixed function", (unsigned)prim, count, ps3gl.active_fp, tex);
-
-	PS3_Video_Finish();
-	PS3_Log("[gl] draw %d done", debug_draws);
-	debug_draws++;
 }
 
 static int
@@ -693,6 +754,7 @@ PrepareState(unsigned *units_out)
 	}
 
 	ps3gl_apply_states();
+	DebugStep("states");
 	ps3gl_apply_matrices();
 
 	if (ps3gl.program_polymost)
@@ -701,14 +763,18 @@ PrepareState(unsigned *units_out)
 		   palette always (white where nothing is bound); the vertices
 		   only need texture coordinate 0 */
 		ps3gl_apply_textures(7);
+		DebugStep("textures");
 		ps3gl_prog_apply();
+		DebugStep("polymost program");
 		units = 1;
 	}
 	else
 	{
 		fp = ChooseFP(&units);
 		ps3gl_apply_textures(units);
+		DebugStep("textures");
 		ps3gl_apply_shader(fp);
+		DebugStep("fixed program");
 	}
 
 	ps3gl.drew = 1;
@@ -735,7 +801,14 @@ glDrawArrays(GLenum mode, GLint first, GLsizei count)
 	uint32_t prim, off;
 	unsigned units;
 
-	if (count <= 0 || first < 0 || !Prim(mode, &prim) || !PrepareDraw(&units))
+	if (count <= 0 || first < 0 || !Prim(mode, &prim))
+	{
+		return;
+	}
+
+	DebugBegin("glDrawArrays", count);
+
+	if (!PrepareDraw(&units))
 	{
 		return;
 	}
@@ -745,9 +818,11 @@ glDrawArrays(GLenum mode, GLint first, GLsizei count)
 		return;
 	}
 
+	DebugStep("vertices copied");
 	BindRing(off);
+	DebugStep("ring bound");
 	rsxDrawVertexArray(ps3gl.ctx, prim, 0, (u32)count);
-	DebugDraw("glDrawArrays", prim, count);
+	DebugEnd();
 
 	ps3gl.st_draws++;
 	ps3gl.st_verts += (uint32_t)count;
@@ -764,7 +839,14 @@ glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 	/* an offset into the bound GL_ELEMENT_ARRAY_BUFFER, if any */
 	indices = ps3gl_element_ptr(indices);
 
-	if (count <= 0 || !indices || !Prim(mode, &prim) || !PrepareDraw(&units))
+	if (count <= 0 || !indices || !Prim(mode, &prim))
+	{
+		return;
+	}
+
+	DebugBegin("glDrawElements", count);
+
+	if (!PrepareDraw(&units))
 	{
 		return;
 	}
@@ -820,7 +902,7 @@ glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 
 	BindRing(off);
 	rsxDrawInlineIndexArray16(ps3gl.ctx, prim, 0, (u32)count, idx16);
-	DebugDraw("glDrawElements", prim, count);
+	DebugEnd();
 
 	ps3gl.st_draws++;
 	ps3gl.st_verts += (uint32_t)(hi - lo + 1);
@@ -917,6 +999,7 @@ ImFlush(int count)
 		return;
 	}
 
+	DebugBegin("glBegin/glEnd", count);
 	PrepareState(&units);
 
 	if (!RingAlloc((uint32_t)count * PS3GL_VERTEX_SIZE, &out, &off))
@@ -936,7 +1019,7 @@ ImFlush(int count)
 	{
 		rsxDrawVertexArray(ps3gl.ctx, prim, 0, (u32)count);
 	}
-	DebugDraw("glBegin/glEnd", prim, count);
+	DebugEnd();
 
 	ps3gl.st_draws++;
 	ps3gl.st_verts += (uint32_t)count;

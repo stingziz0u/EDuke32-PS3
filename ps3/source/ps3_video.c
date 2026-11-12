@@ -538,6 +538,32 @@ PS3_Video_Source(void)
 	return src[cur];
 }
 
+/* For the crash dump (main thread): where the RSX is in the command
+   buffer. get != put a while after = the RSX stopped. */
+void
+PS3_Video_DebugState(void)
+{
+	gcmControlRegister volatile *ctrl;
+	u32 put, get, ref;
+
+	if (!ready || !ctx)
+	{
+		PS3_Log("[video] RSX state: not started");
+		return;
+	}
+
+	ctrl = gcmGetControlRegister();
+	put = ctrl->put;
+	get = ctrl->get;
+	ref = ctrl->ref;
+	usleep(200000);
+	PS3_Log("[video] RSX state: put %08x get %08x ref %08x; 0.2 s later get %08x ref %08x "
+			"(%s); cpu current %p end %p",
+			(unsigned)put, (unsigned)get, (unsigned)ref, (unsigned)ctrl->get, (unsigned)ctrl->ref,
+			ctrl->get == ctrl->put ? "idle" : "NOT at put: stopped or busy",
+			(void *)ctx->current, (void *)ctx->end);
+}
+
 void
 PS3_Video_SetFit(int percent)
 {

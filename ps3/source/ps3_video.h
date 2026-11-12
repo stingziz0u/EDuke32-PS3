@@ -33,6 +33,9 @@ int  PS3_Video_Ready(void);
    memory it may use). */
 void PS3_Video_Finish(void);
 
+/* RSX command buffer position, logged (crash dump) */
+void PS3_Video_DebugState(void);
+
 int  PS3_Video_Width(void);           /* TV mode, e.g. 1280x720 */
 int  PS3_Video_Height(void);
 
