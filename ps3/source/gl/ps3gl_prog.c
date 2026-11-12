@@ -93,9 +93,36 @@ static program_t programs[MAX_PROGRAMS];
 
 static rsxVertexProgram *pm_vp;
 static void *pm_vp_ucode;
-static rsxFragmentProgram *pm_fp;
-static void *pm_fp_ucode;           /* copy in RSX memory */
-static u32 pm_fp_offset;
+/* the result and the debug views (PS3GL_SetPolymostView) */
+static rsxFragmentProgram *pm_fp[PS3GL_POLYMOST_VIEWS];
+static void *pm_fp_ucode[PS3GL_POLYMOST_VIEWS];     /* copies in RSX memory */
+static u32 pm_fp_offset[PS3GL_POLYMOST_VIEWS];
+static int pm_view;
+
+static const char *const view_names[PS3GL_POLYMOST_VIEWS] = {
+	"normal",
+	"1: texture coordinate (red/green)",
+	"2: tile sampling coordinate (red/green), usePalette (blue)",
+	"3: texture as sampled (indexed: the index as grey)",
+	"4: palette color",
+	"5: vertex color",
+	"6: usePalette (red), useColorOnly (green), fog factor (blue)",
+	"7: shade (red), shade table index (green), palswap size (blue)",
+};
+
+void
+PS3GL_SetPolymostView(int view)
+{
+	pm_view = ((view % PS3GL_POLYMOST_VIEWS) + PS3GL_POLYMOST_VIEWS) % PS3GL_POLYMOST_VIEWS;
+	ps3gl.active_fp = -1;   /* load the new one at the next draw */
+	PS3_Log("[gl] Polymost shader view %s", view_names[pm_view]);
+}
+
+int
+PS3GL_PolymostView(void)
+{
+	return pm_view;
+}
 
 /* the vertex program's constants m0 .. u7, as polymost_vp.vcg declares
    them: 16 float4 */
@@ -154,19 +181,26 @@ ps3gl_prog_init(void)
 	pm_const_base = (contiguous && pm_const[0]) ?
 		(int)pm_vp->const_start + (int)pm_const[0]->index : -1;
 
-	pm_fp = (rsxFragmentProgram *)polymost_fp_fpo;
-	rsxFragmentProgramGetUCode(pm_fp, &ucode, &size);
-	pm_fp_ucode = rsxMemalign(64, size);
-
-	if (pm_fp_ucode)
+	for (i = 0; i < PS3GL_POLYMOST_VIEWS; i++)
 	{
-		memcpy(pm_fp_ucode, ucode, size);
-		rsxAddressToOffset(pm_fp_ucode, &pm_fp_offset);
-	}
+		pm_fp[i] = (rsxFragmentProgram *)polymost_fp_views[i];
+		rsxFragmentProgramGetUCode(pm_fp[i], &ucode, &size);
+		pm_fp_ucode[i] = rsxMemalign(64, size);
 
-	PS3_Log("[gl] Polymost programs: vertex constants %s (base %d), fragment program %u bytes%s",
-			contiguous ? "in one block" : "one by one", pm_const_base, (unsigned)size,
-			pm_fp_ucode ? "" : " -- NO RSX MEMORY");
+		if (pm_fp_ucode[i])
+		{
+			memcpy(pm_fp_ucode[i], ucode, size);
+			rsxAddressToOffset(pm_fp_ucode[i], &pm_fp_offset[i]);
+		}
+
+		if (i == 0)
+		{
+			PS3_Log("[gl] Polymost programs: vertex constants %s (base %d), fragment program "
+					"%u bytes%s, %d debug views (L3+R3)",
+					contiguous ? "in one block" : "one by one", pm_const_base, (unsigned)size,
+					pm_fp_ucode[0] ? "" : " -- NO RSX MEMORY", PS3GL_POLYMOST_VIEWS - 1);
+		}
+	}
 }
 
 GLuint APIENTRY
@@ -600,10 +634,11 @@ ps3gl_prog_apply(void)
 		pm_sent_valid = 0;
 	}
 
-	if (ps3gl.active_fp != PS3GL_FP_POLYMOST && pm_fp_ucode)
+	if (ps3gl.active_fp != PS3GL_FP_POLYMOST + pm_view && pm_fp_ucode[pm_view])
 	{
-		rsxLoadFragmentProgramLocation(ctx, pm_fp, pm_fp_offset, GCM_LOCATION_RSX);
-		ps3gl.active_fp = PS3GL_FP_POLYMOST;
+		rsxLoadFragmentProgramLocation(ctx, pm_fp[pm_view], pm_fp_offset[pm_view],
+				GCM_LOCATION_RSX);
+		ps3gl.active_fp = PS3GL_FP_POLYMOST + pm_view;
 	}
 
 	/* matrices: (projection * modelview * u_rotMatrix), rows */
@@ -875,7 +910,7 @@ glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
 	{
 		static int logged;
 
-		if (logged < 16)
+		if (logged < 4)
 		{
 			PS3_Log("[gl] buffer %u (target 0x%x): %ld bytes at %p%s", (unsigned)*Binding(target),
 					(unsigned)target, (long)size, (void *)b->data, data ? "" : " (no data)");

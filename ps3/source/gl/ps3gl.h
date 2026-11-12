@@ -273,6 +273,11 @@ void PS3GL_EndFrame(void);
 /* One log line with the averages since the last call. */
 void PS3GL_LogStats(int frames);   /* 0: only resets the counters */
 
+/* Polymost's fragment program: 0 the result, 1.. debug views of its
+   steps (ps3gl_prog.c, shaders/polymost_fp.fcg). */
+void PS3GL_SetPolymostView(int view);
+int  PS3GL_PolymostView(void);
+
 /* Culling direction check (cvar gl_ps3_cullflip). */
 void PS3GL_SetCullFlip(int flip);
 

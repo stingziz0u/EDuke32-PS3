@@ -113,6 +113,8 @@ extern "C" {
 int   PS3GL_Init(int width, int height);
 void  PS3GL_BeginFrame(void);
 void  PS3GL_EndFrame(void);
+void  PS3GL_SetPolymostView(int view);
+int   PS3GL_PolymostView(void);
 void *PS3GL_GetProcAddress(const char *name);
 }
 
@@ -793,6 +795,16 @@ static void PollPad(void)
 
     int32_t const pressed  = bits & ~pad_lastbits;
     int32_t const released = pad_lastbits & ~bits;
+
+#ifdef USE_OPENGL
+    // L3+R3: the next debug view of Polymost's shader (ps3gl_prog.c)
+    {
+        int32_t const combo = (1 << PADBTN_LEFTSTICK) | (1 << PADBTN_RIGHTSTICK);
+
+        if ((bits & combo) == combo && (pressed & combo))
+            PS3GL_SetPolymostView(PS3GL_PolymostView() + 1);
+    }
+#endif
 
     joystick.bits = (joystick.bits | pressed) & ~released;
     pad_lastbits = bits;

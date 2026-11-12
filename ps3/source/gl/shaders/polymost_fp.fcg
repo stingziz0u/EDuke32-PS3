@@ -14,7 +14,22 @@
  *              z u_usePalette, w u_shadeInterpolate
  *   TEXCOORD6  xyz u_npotEmulation (w is 1 / y), w contrast
  *   TEXCOORD7  rgb fog color, w saturation
+ *
+ * DEBUG_VIEW (build_polymost_shaders.sh builds 0..7, L3+R3 cycles them on
+ * the console) shows a step of the shader instead of its result:
+ *   1 interpolated texture coordinate (fract, red/green)
+ *   2 coordinate the tile is sampled at (red/green), u_usePalette (blue)
+ *   3 the texture as sampled (indexed tiles: the index as grey)
+ *   4 the palette's color (before shade, fog, vertex color)
+ *   5 the vertex color
+ *   6 u_usePalette (red), u_useColorOnly (green), fog factor (blue)
+ *   7 shade / numShades (red), the shade table's index (green),
+ *     u_palswapSize.x * 4 (blue)
  */
+
+#ifndef DEBUG_VIEW
+#define DEBUG_VIEW 0
+#endif
 
 float4 main(
     float4 t0   : TEXCOORD0,
@@ -35,6 +50,10 @@ float4 main(
     float2 tc = t0.xy;
     float usePalette = fl.z;
 
+#if DEBUG_VIEW == 1
+    return float4(frac(tc), 0.0, 1.0);
+#endif
+
     /* NPOT emulation (GLSL mod(a, b) = a - b * floor(a / b)) */
     float2 coord = lerp(tc, tc.yx, usePalette);
     float rows = floor(coord.y / npot.y);
@@ -49,6 +68,16 @@ float4 main(
        and GL_NEAREST anyway: a plain lookup.) */
     float4 color = tex2D(s_texture, tps.xy + texCoord);
 
+#if DEBUG_VIEW == 2
+    return float4(tps.xy + texCoord, usePalette, 1.0);
+#elif DEBUG_VIEW == 3
+    return float4(color.rgb, 1.0);
+#elif DEBUG_VIEW == 5
+    return float4(vcol.rgb, 1.0);
+#elif DEBUG_VIEW == 6
+    return float4(usePalette, fl.y, saturate(t0.w), 1.0);
+#endif
+
     /* palette: shade table, then base palette */
     float shade = clamp(sh.x + clamp(sh.w * t0.z - 0.5 * fl.w, 0.0, sh.y), 0.0, sh.y - 1.0);
     float shadeFloor = floor(shade);
@@ -60,6 +89,12 @@ float4 main(
     float4 palettedColor = tex2D(s_palette, float2(colorIndex, 0.0));
     float4 palettedColorNext = tex2D(s_palette, float2(colorIndexNext, 0.0));
     palettedColor.rgb = lerp(palettedColor.rgb, palettedColorNext.rgb, shadeFrac * fl.w);
+
+#if DEBUG_VIEW == 4
+    return float4(palettedColor.rgb, 1.0);
+#elif DEBUG_VIEW == 7
+    return float4(saturate(shade / max(sh.y, 1.0)), colorIndex, saturate(psw.z * 4.0), 1.0);
+#endif
     float fullbright = lerp(usePalette * palettedColor.a, 0.0, fl.y);
     palettedColor.a = 1.0 - floor(color.r);
     color = lerp(color, palettedColor, usePalette);

@@ -62,7 +62,7 @@ static struct {
  * crash dump, an RSX that stops leaves "didn't finish in time" in the log
  * after the last step it finished.
  */
-#define DEBUG_SYNC_DRAWS 32
+#define DEBUG_SYNC_DRAWS 4
 static int debug_draws;
 
 static int

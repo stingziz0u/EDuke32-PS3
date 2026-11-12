@@ -22,8 +22,10 @@ trap 'rm -rf "$TMP"' EXIT
 "$CGC" -quiet -profile vp40 -o "$TMP/polymost_vp.asm" polymost_vp.vcg
 "$CGCOMP" -a -v "$TMP/polymost_vp.asm" "$TMP/polymost_vp.vpo" >/dev/null
 
-"$CGC" -quiet -profile fp40 -o "$TMP/polymost_fp.asm" polymost_fp.fcg
-"$CGCOMP" -a -f "$TMP/polymost_fp.asm" "$TMP/polymost_fp.fpo" >/dev/null
+for v in 0 1 2 3 4 5 6 7; do
+	"$CGC" -quiet -profile fp40 -DDEBUG_VIEW=$v -o "$TMP/polymost_fp$v.asm" polymost_fp.fcg
+	"$CGCOMP" -a -f "$TMP/polymost_fp$v.asm" "$TMP/polymost_fp$v.fpo" >/dev/null
+done
 
 python3 - "$TMP" <<'PYEOF'
 import sys
@@ -43,7 +45,15 @@ def emit(name, path):
     out.append("};")
     out.append("")
 emit("polymost_vp_vpo", tmp + "/polymost_vp.vpo")
-emit("polymost_fp_fpo", tmp + "/polymost_fp.fpo")
+for v in range(8):
+    emit("polymost_fp%d_fpo" % v, tmp + "/polymost_fp%d.fpo" % v)
+out.append("/* the result (0) and the debug views 1..7 (polymost_fp.fcg) */")
+out.append("#define PS3GL_POLYMOST_VIEWS 8")
+out.append("static const unsigned char *const polymost_fp_views[PS3GL_POLYMOST_VIEWS] = {")
+for v in range(8):
+    out.append("\tpolymost_fp%d_fpo," % v)
+out.append("};")
+out.append("")
 out.append("#endif")
 open("../ps3gl_polymost_data.h", "w").write("\n".join(out) + "\n")
 print("wrote ../ps3gl_polymost_data.h")
