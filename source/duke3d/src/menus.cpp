@@ -633,6 +633,15 @@ static MenuOptionSet_t MEOS_DISPLAYSETUP_UPSCALING = MAKE_MENUOPTIONSET( MEOSN_D
 static MenuOption_t MEO_DISPLAYSETUP_UPSCALING = MAKE_MENUOPTION( &MF_Redfont, &MEOS_DISPLAYSETUP_UPSCALING, &ud.detail );
 static MenuEntry_t ME_DISPLAYSETUP_UPSCALING = MAKE_MENUENTRY( "Upscaling:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_DISPLAYSETUP_UPSCALING, Option );
 
+#ifdef __PPU__
+// PS3: no keyboard for the console's r_showfps or the DNRATE cheat
+static char const *MEOSN_DISPLAYSETUP_SHOWFPS[] = { "Off", "On", "Extra", "Full" };
+static int32_t MEOSV_DISPLAYSETUP_SHOWFPS[] = { 0, 1, 2, 3 };
+static MenuOptionSet_t MEOS_DISPLAYSETUP_SHOWFPS = MAKE_MENUOPTIONSET( MEOSN_DISPLAYSETUP_SHOWFPS, MEOSV_DISPLAYSETUP_SHOWFPS, 0x0 );
+static MenuOption_t MEO_DISPLAYSETUP_SHOWFPS = MAKE_MENUOPTION( &MF_Redfont, &MEOS_DISPLAYSETUP_SHOWFPS, &ud.showfps );
+static MenuEntry_t ME_DISPLAYSETUP_SHOWFPS = MAKE_MENUENTRY( "Show FPS:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_DISPLAYSETUP_SHOWFPS, Option );
+#endif
+
 
 #ifndef EDUKE32_ANDROID_MENU
 static char const *MEOSN_DISPLAYSETUP_ASPECTRATIO[] = { "Stretched", "Auto" };
@@ -840,6 +849,9 @@ static MenuEntry_t *MEL_DISPLAYSETUP[] = {
     &ME_DISPLAYSETUP_TOUCHALPHA,
 #endif
     &ME_DISPLAYSETUP_UPSCALING,
+#ifdef __PPU__
+    &ME_DISPLAYSETUP_SHOWFPS,
+#endif
 #if !defined EDUKE32_RETAIL_MENU && defined USE_OPENGL
     &ME_DISPLAYSETUP_RENDERER,
 #endif

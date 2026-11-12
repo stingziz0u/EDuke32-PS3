@@ -36,6 +36,9 @@ endif
 
 include $(PS3DEV)/ppu_rules
 
+# (ppu_rules and the per-file rules below come before 'all')
+.DEFAULT_GOAL := all
+
 #----------------------------------------------------------------------------
 # Package identity
 #
@@ -197,8 +200,10 @@ $(MINTOC_OBJS): CXXFLAGS += -mminimal-toc
 $(OBJDIR)/build/loguru.o: CXXFLAGS += -include $(CURDIR)/compat/ps3_threads.h \
 	-DLOGURU_PTHREADS=0 -DLOGURU_WINTHREADS=0 -DLOGURU_STACKTRACES=0
 
-# The build's name in the engine's log and console
+# The build's name, patch level and date in the engine's log and console:
+# rebuilt every time (a stale rev.o kept saying the previous patch level)
 $(OBJDIR)/build/rev.o: CXXFLAGS += -DREV=r10669-PS3-p$(PATCHLEVEL)
+$(OBJDIR)/build/rev.o: FORCE
 
 #----------------------------------------------------------------------------
 # Rules
