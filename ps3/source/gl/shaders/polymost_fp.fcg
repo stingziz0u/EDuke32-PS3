@@ -1,6 +1,6 @@
 /*
  * polymost_fp.fcg -- Polymost's fragment shader (polymost1Frag.glsl, the
- * GL_ARB_shader_texture_lod path) for the RSX. Detail and glow maps (high
+ * GL_ARB_shader_texture_lod path, without the gradients) for the RSX. Detail and glow maps (high
  * resolution packs only) aren't done.
  *
  * The uniforms come from the vertex program (polymost_vp.vcg), packed:
@@ -44,7 +44,10 @@ float4 main(
 
     float2 texCoord = lerp(frac(newCoord), saturate(newCoord), htc.zw);
     texCoord = clamp(tps.zw * texCoord, htc.xy, tps.zw - htc.xy);
-    float4 color = tex2D(s_texture, tps.xy + texCoord, ddx(tc), ddy(tc));
+    /* (GLSL: texture2DGradARB with the derivatives of tc. PSL1GHT's
+       cgcomp drops TXD without a word, and the tilesheets have one level
+       and GL_NEAREST anyway: a plain lookup.) */
+    float4 color = tex2D(s_texture, tps.xy + texCoord);
 
     /* palette: shade table, then base palette */
     float shade = clamp(sh.x + clamp(sh.w * t0.z - 0.5 * fl.w, 0.0, sh.y), 0.0, sh.y - 1.0);

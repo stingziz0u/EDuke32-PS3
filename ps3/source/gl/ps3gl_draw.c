@@ -36,6 +36,7 @@
 #include "ps3gl.h"
 #include "ps3gl_shader_data.h"
 #include "../ps3_platform.h"
+#include "../ps3_video.h"
 
 static rsxVertexProgram *vp;
 static void *vp_ucode;
@@ -606,6 +607,43 @@ BindRing(uint32_t off)
 			PS3GL_VERTEX_SIZE, 4, GCM_VERTEX_DATA_TYPE_U8, GCM_LOCATION_RSX);
 }
 
+/* The first draws after start (and after a mode change) are waited for,
+   one by one, and logged: an RSX that faults on one shows which, with
+   what was bound. A dead RSX then kills the game thread on its next write
+   to RSX memory, so the line without "done" is the culprit. */
+#define DEBUG_SYNC_DRAWS 300
+static int debug_draws;
+
+static void
+DebugDraw(const char *what, uint32_t prim, int count)
+{
+	char tex[160];
+	int i, len = 0;
+
+	if (debug_draws >= DEBUG_SYNC_DRAWS)
+	{
+		return;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		const ps3gl_tmu_t *t = &ps3gl.tmu[i];
+		const ps3gl_texture_t *x = &ps3gl.textures[t->tex];
+
+		len += snprintf(tex + len, sizeof(tex) - (size_t)len, " u%d:%d %dx%d%s/%d@%08x", i,
+				t->tex, x->width, x->height, x->swizzled ? "s" : "l", x->num_levels,
+				(unsigned)x->offset);
+	}
+
+	PS3_Log("[gl] draw %d (frame %u): %s, %s, prim %u, %d verts, fp %d;%s", debug_draws,
+			(unsigned)ps3gl.frame, what, ps3gl.program_polymost ? "Polymost program" :
+			"fixed function", (unsigned)prim, count, ps3gl.active_fp, tex);
+
+	PS3_Video_Finish();
+	PS3_Log("[gl] draw %d done", debug_draws);
+	debug_draws++;
+}
+
 static int
 Prim(GLenum mode, uint32_t *prim)
 {
@@ -698,6 +736,7 @@ glDrawArrays(GLenum mode, GLint first, GLsizei count)
 
 	BindRing(off);
 	rsxDrawVertexArray(ps3gl.ctx, prim, 0, (u32)count);
+	DebugDraw("glDrawArrays", prim, count);
 
 	ps3gl.st_draws++;
 	ps3gl.st_verts += (uint32_t)count;
@@ -770,6 +809,7 @@ glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 
 	BindRing(off);
 	rsxDrawInlineIndexArray16(ps3gl.ctx, prim, 0, (u32)count, idx16);
+	DebugDraw("glDrawElements", prim, count);
 
 	ps3gl.st_draws++;
 	ps3gl.st_verts += (uint32_t)(hi - lo + 1);
@@ -885,6 +925,7 @@ ImFlush(int count)
 	{
 		rsxDrawVertexArray(ps3gl.ctx, prim, 0, (u32)count);
 	}
+	DebugDraw("glBegin/glEnd", prim, count);
 
 	ps3gl.st_draws++;
 	ps3gl.st_verts += (uint32_t)count;
