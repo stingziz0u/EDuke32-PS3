@@ -120,6 +120,8 @@ static int gl_loaded;       // glad has ps3gl's entry points
 static int gl_started;      // ps3gl runs on the RSX (an OpenGL mode was set)
 static int gl_frame_open;   // PS3GL_BeginFrame done for the frame being drawn
 
+int PS3_GladFill(void);   // ps3_gladfill.cpp
+
 static void *GLGetProc(const char *name)
 {
     return PS3GL_GetProcAddress(name);
@@ -659,6 +661,9 @@ int32_t initsystem(void)
     // classic renderer (videoSetRenderMode). ps3gl only keeps it until an
     // OpenGL mode starts it on the RSX.
     gladLoadGLLoader(GLGetProc);
+
+    // what glad didn't load for a 2.1 context (ps3_gladfill.cpp)
+    LOG_F(INFO, "ps3gl: %d GL 3+ entry points filled in.", PS3_GladFill());
 
     if (novideo || GLVersion.major < 2)
     {
@@ -1571,6 +1576,7 @@ static void GameMain(void)
 static void GameThread(void *arg)
 {
     UNREFERENCED_PARAMETER(arg);
+    PS3_Debug_ThreadStart(GAME_STACK_SIZE);
     GameMain();
     sysThreadExit(0);
 }
@@ -1597,6 +1603,14 @@ int main(int argc, char *argv[])
     }
 
     sysThreadJoin(tid, &code);
+
+    // Every normal way out ends the process from the game thread itself
+    // (PS3_Exit): coming back here means it died. Its trail to the log.
+    {
+        char why[64];
+        snprintf(why, sizeof(why), "the game thread died (exit code %d)", (int)code);
+        PS3_Debug_Dump(why);
+    }
 
     PS3_Exit((int)code);
 }

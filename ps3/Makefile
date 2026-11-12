@@ -166,8 +166,8 @@ ENGINE_OBJS := \
 
 # The PS3 layer: talks to the engine (its headers) but calls the real C
 # library (not renamed).
-LAYER_CPP := ps3layer driver_ps3
-LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video
+LAYER_CPP := ps3layer driver_ps3 ps3_gladfill
+LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video ps3_debug
 
 # ps3gl: OpenGL on the RSX, TyrQuakeCell's (ps3/source/gl), plus what
 # Polymost needs (ps3gl_prog.c: its GLSL program as Cg, buffer objects;
@@ -212,6 +212,21 @@ MINTOC_OBJS := \
 
 $(MINTOC_OBJS): CFLAGS += -mminimal-toc
 $(MINTOC_OBJS): CXXFLAGS += -mminimal-toc
+
+# Function trace (ps3/source/ps3_debug.c): what's in FTRACE_OBJS logs its
+# calls into a ring in memory, written to the log if the game thread dies
+# (no crash handler on a retail console). The engine's headers (small
+# inline helpers) stay out, or they'd fill the ring.
+FTRACE_FLAGS := -finstrument-functions \
+	-finstrument-functions-exclude-file-list=/build/include/,/include/c++/,/compat/
+FTRACE_OBJS := \
+	$(patsubst %,$(OBJDIR)/build/%.o,engine polymost glbuild glsurface \
+		texcache hightile mdsprite voxmodel palette baselayer 2d) \
+	$(OBJDIR)/ps3/ps3layer.o
+FTRACE_C_OBJS := $(patsubst %,$(OBJDIR)/ps3/gl/%.o,$(PS3GL_C))
+
+$(FTRACE_OBJS): CXXFLAGS += $(FTRACE_FLAGS)
+$(FTRACE_C_OBJS): PCFLAGS += $(FTRACE_FLAGS)
 
 # The logger: std::recursive_mutex and friends on lv2 (no std threads on
 # the PPU), no pthreads, no stack traces.

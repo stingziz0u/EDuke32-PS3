@@ -51,6 +51,12 @@ void PS3_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void PS3_LogRaw(const char *text);   /* as is, no newline added */
 void PS3_LogShutdown(void);
 
+/* ps3_debug.c: the trail of the game thread, written to the log when it
+   dies (see the file) */
+void PS3_Crumb(const char *tag, int val);
+void PS3_Debug_ThreadStart(unsigned stack_size);
+void PS3_Debug_Dump(const char *why);
+
 /* ps3layer.cpp */
 void PS3_Pump(void);                 /* sysutil queue; cheap, call often */
 int  PS3_ExitRequested(void);        /* "Quit Game" from the XMB */
