@@ -496,6 +496,17 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 	PS3_Crumb("cv pv", (int)(uintptr_t)pv);
 	PS3_Crumb("cv pt0", (int)(uintptr_t)pt0);
 
+	/* which of the two goes, if one does: reading the arrays or writing
+	   the ring */
+	{
+		volatile float probe = *(const volatile float *)pv;
+
+		(void)probe;
+		PS3_Crumb("cv read ok", 0);
+		*(volatile uint32_t *)out = 0;
+		PS3_Crumb("cv write ok", 0);
+	}
+
 	/* the usual case: float positions, float texcoords, byte colors */
 	fast = (va->type == GL_FLOAT) &&
 		(!pt0 || (vt0->type == GL_FLOAT && vt0->size >= 2)) &&

@@ -864,13 +864,21 @@ glBufferData(GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage)
 
 	b->size = (size_t)size;
 
+	/* GL leaves new storage undefined; zeroed here, which also shows at
+	   once (crumb) if this memory can't be written */
+	if (!data && size)
+	{
+		PS3_Crumb("bufdata zero", (int)size);
+		memset(b->data, 0, (size_t)size);
+	}
+
 	{
 		static int logged;
 
 		if (logged < 16)
 		{
-			PS3_Log("[gl] buffer %u (target 0x%x): %ld bytes%s", (unsigned)*Binding(target),
-					(unsigned)target, (long)size, data ? "" : " (no data)");
+			PS3_Log("[gl] buffer %u (target 0x%x): %ld bytes at %p%s", (unsigned)*Binding(target),
+					(unsigned)target, (long)size, (void *)b->data, data ? "" : " (no data)");
 			logged++;
 		}
 	}

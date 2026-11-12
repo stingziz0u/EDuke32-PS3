@@ -160,6 +160,21 @@ PS3GL_Init(int width, int height)
 
 		rsxAddressToOffset(ps3gl.ring, &ps3gl.ring_off);
 
+		/* every segment written once now, from the start (a ring the CPU
+		   can't write would show here, in the log, not mid-game) */
+		{
+			int seg;
+
+			for (seg = 0; seg < PS3GL_RING_SEGMENTS; seg++)
+			{
+				uint8_t *base = ps3gl.ring + seg * PS3GL_RING_SEG_SIZE;
+
+				PS3_Crumb("ring seg", seg);
+				memset(base, 0, PS3GL_RING_SEG_SIZE);
+				PS3_Log("[gl] ring segment %d at %p written", seg, (void *)base);
+			}
+		}
+
 		ps3gl.frame_label = (volatile uint32_t *)gcmGetLabelAddress(PS3GL_LABEL_FRAME);
 		*ps3gl.frame_label = 0;
 		ps3gl.frame = 0;

@@ -39,6 +39,7 @@
 #include "communityapi.h"
 
 #include <dirent.h>
+#include <malloc.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -1588,6 +1589,14 @@ int main(int argc, char *argv[])
 
     sys_ppu_thread_t tid;
     u64 code = 0;
+
+    // newlib's free() gives the top of the heap back to lv2 once more than
+    // 128 KB of it is free, and PSL1GHT's negative sbrk unmaps whole 1 MB
+    // pages: memory still in use was going too (ps3gl's 600 KB stream
+    // buffer, freed and allocated again by Polymost, read back as unmapped
+    // -- the game thread dead). The heap never shrinks; freed memory is
+    // reused as always (handoff notes 3.173: for every PSL1GHT port).
+    mallopt(M_TRIM_THRESHOLD, 0x7fffffff);
 
     PS3_LogInit();
     PS3_Log("[0] main() reached (%s)", PS3_BUILD_DATE);
