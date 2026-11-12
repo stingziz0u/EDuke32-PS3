@@ -109,7 +109,7 @@ XMPFLAGS += -Wno-unused-parameter -Wno-sign-compare
 PCFLAGS  := -O2 -std=gnu99 -Wall -fno-strict-aliasing -fno-common -mcpu=cell $(MACHDEP)
 PCFLAGS  += -Werror=implicit-function-declaration -Werror=int-conversion -MMD -MP
 PCFLAGS  += -DPS3_APPID=\"$(APPID)\" -DPS3_BUILD_DATE=\"$(BUILD_DATE)\"
-PCFLAGS  += -I$(CURDIR)/source $(LIBPSL1GHT_INC)
+PCFLAGS  += -I$(CURDIR)/source -I$(CURDIR)/compat $(LIBPSL1GHT_INC)
 
 # -lrt and -llv2 are MANDATORY: without them the binary links cleanly, the
 # PKG installs, and it never reaches main(). Black screen, back to the XMB,
@@ -159,9 +159,15 @@ ENGINE_OBJS := \
 # The PS3 layer: talks to the engine (its headers) but calls the real C
 # library (not renamed).
 LAYER_CPP := ps3layer driver_ps3
-LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_gpu ps3_video
+LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video
 
-LAYER_OBJS := $(patsubst %,$(OBJDIR)/ps3/%.o,$(LAYER_CPP) $(LAYER_C))
+# ps3gl: OpenGL 1.x on the RSX, TyrQuakeCell's (ps3/source/gl). The display
+# layer (ps3_video.c) is TyrQuakeCell's too: one RSX owner for both the
+# software image and the OpenGL render target.
+PS3GL_C   := ps3gl_main ps3gl_state ps3gl_texture ps3gl_draw
+
+LAYER_OBJS := $(patsubst %,$(OBJDIR)/ps3/%.o,$(LAYER_CPP) $(LAYER_C)) \
+	$(patsubst %,$(OBJDIR)/ps3/gl/%.o,$(PS3GL_C))
 
 # The C library calls the engine makes that go to the PS3 versions.
 REDEFINE := exit abort printf fprintf vfprintf vprintf puts putchar fputs fputc \
@@ -169,9 +175,9 @@ REDEFINE := exit abort printf fprintf vfprintf vprintf puts putchar fputs fputc 
 	unlink rename getcwd chdir
 REDEFINE_FLAGS := $(foreach s,$(REDEFINE),--redefine-sym $(s)=PS3_$(s))
 
-# The file that talks to GCM goes at -O1 -fno-inline: PSL1GHT's syscall
-# stubs don't survive aggressive inlining (handoff notes 4.2).
-$(OBJDIR)/ps3/ps3_gpu.o: PCFLAGS := $(filter-out -O2,$(PCFLAGS)) -O1 -fno-inline
+# The file that talks to GCM the most goes at -O1 -fno-inline: PSL1GHT's
+# syscall stubs don't survive aggressive inlining (handoff notes 4.2).
+$(OBJDIR)/ps3/ps3_video.o: PCFLAGS := $(filter-out -O2,$(PCFLAGS)) -O1 -fno-inline
 
 # The TOC (handoff notes 3.100): ppu-gcc 7.2 has no -mcmodel, the TOC
 # holds 64 KB and the link must not split it (--no-multi-toc: a split TOC
@@ -260,6 +266,11 @@ $(OBJDIR)/ps3/%.o: $(CURDIR)/source/%.cpp
 $(OBJDIR)/ps3/%.o: $(CURDIR)/source/%.c
 	@mkdir -p $(dir $@)
 	@echo "CC  ps3/$*.c"
+	@$(CC) $(PCFLAGS) -c $< -o $@
+
+$(OBJDIR)/ps3/gl/%.o: $(CURDIR)/source/gl/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  ps3/gl/$*.c"
 	@$(CC) $(PCFLAGS) -c $< -o $@
 
 # The engine and the game in one object, the C library calls renamed.

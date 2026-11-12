@@ -74,17 +74,8 @@ void PS3_perror(const char *s);
 void PS3_abort(void) __attribute__((noreturn));
 void PS3_exit(int code) __attribute__((noreturn));
 
-/* ps3_video.c */
-int  PS3_Video_Init(void);           /* 0 ok; idempotent */
-void PS3_Video_Shutdown(void);
-int  PS3_Video_Ready(void);
-void PS3_Video_SetFit(int percent);  /* share of the TV (overscan), 50..100 */
-void PS3_Video_SetFilter(int linear);
-void PS3_Video_SetPalette(const unsigned char *rgb);   /* 768 bytes */
-/* The 8 bit screen, w x h pixels (rows of w), shown at aw:ah; flips. */
-void PS3_Video_Present8(const unsigned char *pixels, int w, int h, int aw, int ah);
-void PS3_Video_TextScreen(const char *title, const char *const *lines, int nlines);
-void PS3_Video_SetPerfLog(int on);
+/* The display (RSX init, flips, the software image and the OpenGL render
+   target) is ps3_video.c / ps3_video.h, shared with TyrQuakeCell. */
 
 #ifdef __cplusplus
 }

@@ -47,6 +47,8 @@
 #include <sysutil/sysutil.h>
 
 #include "ps3_platform.h"
+#include "ps3_video.h"
+#include "ps3_font.h"
 #include "ps3_pad.h"
 #include "driver_ps3.h"
 #include <unistd.h>
@@ -86,6 +88,9 @@ bool g_ImGuiCaptureInput = false;
 uint8_t g_ImGuiCapturedDevices;
 
 static char modeschecked = 0;
+
+// the faded palette as A8R8G8B8, for the software screen
+static uint32_t pal32[256];
 static int32_t vsync_renderlayer;
 
 #if !defined STARTUP_SETUP_WINDOW
@@ -372,6 +377,87 @@ static unsigned WaitForButtons(unsigned mask, int seconds)
     return 0;
 }
 
+// ---------------------------------------
+//
+// Text screens (errors, questions, no data): drawn by the CPU into a
+// 1280x720 source image and presented. The game's next frame sets its own
+// source size again.
+//
+// ---------------------------------------
+
+#define TXT_W 1280
+#define TXT_H 720
+#define TXT_SCALE 2
+
+static void TxtRect(uint32_t *img, int x, int y, int w, int h, uint32_t c)
+{
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > TXT_W) w = TXT_W - x;
+    if (y + h > TXT_H) h = TXT_H - y;
+
+    for (int j = 0; j < h; j++)
+    {
+        uint32_t *row = img + (y + j) * TXT_W + x;
+        for (int i = 0; i < w; i++)
+            row[i] = c;
+    }
+}
+
+static void TxtString(uint32_t *img, int x, int y, const char *str, uint32_t c)
+{
+    for (; *str; str++, x += 8 * TXT_SCALE)
+    {
+        unsigned ch = (unsigned char)*str;
+
+        if (ch < 32 || ch > 126)
+            ch = '?';
+
+        for (int gy = 0; gy < 16; gy++)
+        {
+            unsigned const bits = ps3_font8x16[ch - 32][gy];
+
+            if (!bits)
+                continue;
+
+            for (int gx = 0; gx < 8; gx++)
+                if (bits & (0x80u >> gx))
+                    TxtRect(img, x + gx * TXT_SCALE, y + gy * TXT_SCALE, TXT_SCALE, TXT_SCALE, c);
+        }
+    }
+}
+
+static void TextScreen(const char *title, const char *const *lines, int nlines)
+{
+    if (PS3_Video_Init() != 0 || PS3_Video_SetSource(TXT_W, TXT_H) != 0)
+        return;
+
+    uint32_t *const img = PS3_Video_Source();
+
+    if (!img)
+        return;
+
+    TxtRect(img, 0, 0, TXT_W, TXT_H, 0xff000000u);
+
+    int y = TXT_H / 5;
+
+    if (title)
+    {
+        int const tw = (int)strlen(title) * 8 * TXT_SCALE;
+        TxtString(img, (TXT_W - tw) / 2, y, title, 0xffd02020u);
+        y += 16 * TXT_SCALE * 2;
+    }
+
+    for (int i = 0; i < nlines; i++, y += 16 * TXT_SCALE + 8)
+        if (lines[i])
+            TxtString(img, TXT_W / 10, y, lines[i], 0xffe0e0e0u);
+
+    PS3_Video_Present();
+    PS3_Video_Finish();
+
+    PS3_Log("[video] text screen: %s", title ? title : "");
+}
+
 static void ShowText(const char *title, const char *message, const char *footer1, const char *footer2)
 {
     static char buf[TEXT_LINES][TEXT_COLUMNS + 1];
@@ -409,8 +495,7 @@ static void ShowText(const char *title, const char *message, const char *footer1
     if (footer1) lines[n++] = footer1;
     if (footer2) lines[n++] = footer2;
 
-    if (PS3_Video_Init() == 0)
-        PS3_Video_TextScreen(title, lines, n);
+    TextScreen(title, lines, n);
 }
 
 void PS3_FatalScreen(const char *title, const char *message)
@@ -1009,12 +1094,30 @@ void videoShowFrame(int32_t w)
         while (lockcount) videoEndDrawing();
     }
 
-    uint8_t *const buf = softsurface_getBuffer();
+    uint8_t const *const buf = softsurface_getBuffer();
 
     if (buf)
     {
         vec2_t const res = softsurface_getBufferResolution();
-        PS3_Video_Present8(buf, res.x, res.y, xres, yres);
+
+        // the image the RSX scales to the TV: the engine's 8 bit screen
+        // through the faded palette (rows of res.x pixels, square pixels)
+        if (PS3_Video_SetSource(res.x, res.y) == 0)
+        {
+            uint32_t *dst = PS3_Video_Source();
+
+            if (dst)
+            {
+                uint64_t const t0 = PS3_Micros();
+                int const n = res.x * res.y;
+
+                for (int i = 0; i < n; i++)
+                    dst[i] = pal32[buf[i]];
+
+                PS3_Video_ProfileCopy((long long)(PS3_Micros() - t0));
+                PS3_Video_Present();
+            }
+        }
     }
 
     PS3_Pump();
@@ -1028,16 +1131,10 @@ int32_t videoUpdatePalette(int32_t start, int32_t num)
     if (bpp > 8)
         return 0;
 
-    uint8_t rgb[768];
-
     for (int i = 0; i < 256; i++)
-    {
-        rgb[i * 3 + 0] = curpalettefaded[i].r;
-        rgb[i * 3 + 1] = curpalettefaded[i].g;
-        rgb[i * 3 + 2] = curpalettefaded[i].b;
-    }
+        pal32[i] = 0xff000000u | ((uint32_t)curpalettefaded[i].r << 16) |
+                   ((uint32_t)curpalettefaded[i].g << 8) | (uint32_t)curpalettefaded[i].b;
 
-    PS3_Video_SetPalette(rgb);
     return 0;
 }
 
@@ -1185,11 +1282,8 @@ static void NoDataScreen(void)
 
     PS3_Log("[7] no game data: showing the instructions");
 
-    if (PS3_Video_Init() == 0)
-    {
-        PS3_Video_TextScreen("EDUKE32", lines, ARRAY_SIZE(lines));
-        WaitForButtons(PS3_PAD_CROSS, 120);
-    }
+    TextScreen("EDUKE32", lines, ARRAY_SIZE(lines));
+    WaitForButtons(PS3_PAD_CROSS, 120);
 }
 
 static void GameMain(void)
