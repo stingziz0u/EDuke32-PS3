@@ -73,8 +73,9 @@ BUILD_DATE := $(shell date +%Y-%m-%d)
 # Flags
 #----------------------------------------------------------------------------
 
-# EDuke32's own (GNUmakefile, release, no OpenGL / network / startup
+# EDuke32's own (GNUmakefile, release, no Polymer / network / startup
 # window / FLAC), plus the PS3: big-endian, no SDL (RENDERTYPEPS3).
+# OpenGL (Polymost) goes to the RSX through ps3gl.
 COMMON := -O2 -funswitch-loops -fomit-frame-pointer -fno-strict-aliasing -fno-stack-protector
 COMMON += -funsigned-char -mcpu=cell $(MACHDEP)
 COMMON += -Wall -Wno-char-subscripts -Wno-missing-braces -Wno-attributes -Wno-strict-overflow
@@ -86,7 +87,7 @@ COMMON += -Werror=implicit-function-declaration -Werror=int-conversion
 COMMON += -MMD -MP
 
 COMMON += -D_FORTIFY_SOURCE=0 -DNDEBUG -DNOASM -DNETCODE_DISABLE -DRENDERTYPEPS3=1
-COMMON += -DHAVE_VORBIS -DHAVE_XMP -D_GNU_SOURCE=1
+COMMON += -DHAVE_VORBIS -DHAVE_XMP -D_GNU_SOURCE=1 -DUSE_OPENGL
 COMMON += -DB_LITTLE_ENDIAN=0 -DB_BIG_ENDIAN=1
 COMMON += -D__PS3__ -DPS3_APPID=\"$(APPID)\" -DPS3_BUILD_DATE=\"$(BUILD_DATE)\"
 COMMON += -DPS3_VERSION=\"$(VERSION)\" -DPS3_PATCHLEVEL=$(PATCHLEVEL)
@@ -128,8 +129,13 @@ BUILD_CPP := 2d a-c baselayer cache1d clip colmatch common communityapi compat c
 	crc32 defs dxtfilter engine fix16 hash hightile klzw kplib loguru md4 mhk \
 	mmulti mutex osd palette pngwrite pragmas rev screenshot screentext scriptfile \
 	sjson smalltextfont smmalloc smmalloc_generic smmalloc_tls softsurface texcache \
-	textfont tiles timer vfs
+	textfont tiles timer vfs \
+	glbuild glsurface mdsprite polymost tilepacker voxmodel
 BUILD_C   := lz4 miniz miniz_tdef miniz_tinfl xxhash
+
+# Polymost's GLSL, as text in the program (GNUmakefile's rule): ps3gl
+# recognizes it and runs its Cg version (source/gl/shaders/polymost_*).
+GLSL      := polymost1Frag polymost1Vert
 
 DUKE_CPP  := actors anim cheats cmdline common config demo dnames game gamedef \
 	gameexec gamestructures gamevars global grpscan input menus network osdcmds \
@@ -150,6 +156,8 @@ GAMEPS3_CPP := ps3_game_duke3d
 
 ENGINE_OBJS := \
 	$(patsubst %,$(OBJDIR)/build/%.o,$(BUILD_CPP) $(BUILD_C)) \
+	$(patsubst %,$(OBJDIR)/glsl/%.o,$(GLSL)) \
+	$(OBJDIR)/glad/glad.o \
 	$(patsubst %,$(OBJDIR)/duke3d/%.o,$(DUKE_CPP)) \
 	$(patsubst %,$(OBJDIR)/audiolib/%.o,$(AUDIO_CPP)) \
 	$(patsubst %,$(OBJDIR)/mact/%.o,$(MACT_CPP)) \
@@ -161,10 +169,12 @@ ENGINE_OBJS := \
 LAYER_CPP := ps3layer driver_ps3
 LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video
 
-# ps3gl: OpenGL 1.x on the RSX, TyrQuakeCell's (ps3/source/gl). The display
-# layer (ps3_video.c) is TyrQuakeCell's too: one RSX owner for both the
-# software image and the OpenGL render target.
-PS3GL_C   := ps3gl_main ps3gl_state ps3gl_texture ps3gl_draw
+# ps3gl: OpenGL on the RSX, TyrQuakeCell's (ps3/source/gl), plus what
+# Polymost needs (ps3gl_prog.c: its GLSL program as Cg, buffer objects;
+# ps3gl_procs.c: the entry points for glad). The display layer
+# (ps3_video.c) is TyrQuakeCell's too: one RSX owner for both the software
+# image and the OpenGL render target.
+PS3GL_C   := ps3gl_main ps3gl_state ps3gl_texture ps3gl_draw ps3gl_prog ps3gl_procs
 
 LAYER_OBJS := $(patsubst %,$(OBJDIR)/ps3/%.o,$(LAYER_CPP) $(LAYER_C)) \
 	$(patsubst %,$(OBJDIR)/ps3/gl/%.o,$(PS3GL_C))
@@ -192,7 +202,9 @@ MINTOC_OBJS := \
 	$(patsubst %,$(OBJDIR)/build/%.o,defs osd loguru kplib compat scriptfile common \
 		baselayer mhk md4 hightile sjson cache1d colmatch pngwrite screenshot crc32 \
 		communityapi cpuid rev smmalloc smmalloc_generic smmalloc_tls texcache \
-		dxtfilter klzw lz4 miniz miniz_tdef miniz_tinfl xxhash) \
+		dxtfilter klzw lz4 miniz miniz_tdef miniz_tinfl xxhash \
+		glbuild glsurface mdsprite voxmodel tilepacker) \
+	$(OBJDIR)/glad/glad.o \
 	$(patsubst %,$(OBJDIR)/audiolib/%.o,vorbis xmp formats xa flac midi music \
 		driver_sf2 gmtimbre drivers fx_man) \
 	$(patsubst %,$(OBJDIR)/mact/%.o,scriplib animlib) \
@@ -231,6 +243,21 @@ $(OBJDIR)/build/%.o: $(ESRC)/build/src/%.cpp
 $(OBJDIR)/build/%.o: $(ESRC)/build/src/%.c
 	@mkdir -p $(dir $@)
 	@echo "CC  build/$*.c"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/glsl/%.cpp: $(ESRC)/build/src/%.glsl
+	@mkdir -p $(dir $@)
+	@echo "GLSL build/$*.glsl"
+	@printf 'extern char const *%s;\nchar const *%s = R"shader(' $* $* > $@
+	@cat $< >> $@
+	@printf ')shader";\n' >> $@
+
+$(OBJDIR)/glsl/%.o: $(OBJDIR)/glsl/%.cpp
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/glad/glad.o: $(ESRC)/glad/src/glad.c
+	@mkdir -p $(dir $@)
+	@echo "CC  glad/glad.c"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJDIR)/duke3d/%.o: $(ESRC)/duke3d/src/%.cpp

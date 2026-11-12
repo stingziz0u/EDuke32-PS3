@@ -801,6 +801,17 @@ int CONFIG_ReadSetup(void)
 
     if (ud.setup.bpp < 8) ud.setup.bpp = 32;
 
+#ifdef __PPU__
+    // PS3: the builds before Polymost ran on the RSX saved 8 bits (the
+    // classic renderer, the only one). Once, the default becomes Polymost;
+    // after that the setting is whatever the player chooses.
+    {
+        int32_t ps3polymost = 0;
+        if (SCRIPT_GetNumber(ud.config.scripthandle, "Screen Setup", "PS3Polymost", &ps3polymost))
+            ud.setup.bpp = 32;
+    }
+#endif
+
 #ifdef POLYMER
     int32_t rendmode = 0;
     SCRIPT_GetNumber(ud.config.scripthandle, "Screen Setup", "Polymer", &rendmode);
@@ -933,6 +944,9 @@ void CONFIG_WriteSetup(uint32_t flags)
 #endif
 
     SCRIPT_PutNumber(ud.config.scripthandle, "Screen Setup", "ScreenBPP", ud.setup.bpp, FALSE, FALSE);
+#ifdef __PPU__
+    SCRIPT_PutNumber(ud.config.scripthandle, "Screen Setup", "PS3Polymost", 1, FALSE, FALSE);
+#endif
     SCRIPT_PutNumber(ud.config.scripthandle, "Screen Setup", "ScreenDisplay", r_displayindex, FALSE, FALSE);
     SCRIPT_PutNumber(ud.config.scripthandle, "Screen Setup", "ScreenHeight", ud.setup.ydim, FALSE, FALSE);
     SCRIPT_PutNumber(ud.config.scripthandle, "Screen Setup", "ScreenMode", ud.setup.fullscreen, FALSE, FALSE);

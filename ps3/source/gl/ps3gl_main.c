@@ -166,6 +166,7 @@ PS3GL_Init(int width, int height)
 
 		ps3gl_textures_init();
 		ps3gl_shaders_init();
+		ps3gl_prog_init();
 
 		ready = 1;
 		PS3_Log("[gl] ps3gl ready: ring %d x %d KB at offset 0x%08x",
@@ -188,6 +189,10 @@ PS3GL_Init(int width, int height)
 		memset(&ps3gl.va_vertex, 0, sizeof(ps3gl.va_vertex));
 		memset(&ps3gl.va_color, 0, sizeof(ps3gl.va_color));
 		memset(ps3gl.va_texcoord, 0, sizeof(ps3gl.va_texcoord));
+		/* GL's fog defaults */
+		ps3gl.fog_start = 0.0f;
+		ps3gl.fog_end = 1.0f;
+		memset(ps3gl.fog_color, 0, sizeof(ps3gl.fog_color));
 		started = 1;
 	}
 
@@ -307,12 +312,13 @@ glGetString(GLenum name)
 	{
 		case GL_VENDOR:     return (const GLubyte *)"TyrQuakeCell";
 		case GL_RENDERER:   return (const GLubyte *)"RSX (ps3gl)";
-		/* 1.3: multitexture, GL_COMBINE and glDrawRangeElements. Not 1.4:
-		   TyrQuake would use GL_GENERATE_MIPMAP. No buffer objects, no
-		   ARB programs, no texture compression, no NPOT textures. */
-		case GL_VERSION:    return (const GLubyte *)"1.3 ps3gl";
+		/* 2.1 for EDuke32: its GLSL program (Polymost's, run as Cg
+		   programs, ps3gl_prog.c) and buffer objects (in main memory).
+		   No texture compression, no NPOT textures, no sync objects. */
+		case GL_VERSION:    return (const GLubyte *)"2.1 ps3gl";
 		case GL_EXTENSIONS: return (const GLubyte *)"GL_ARB_multitexture GL_ARB_texture_env_combine "
-				"GL_EXT_draw_range_elements";
+				"GL_EXT_draw_range_elements GL_ARB_shader_objects GL_ARB_vertex_buffer_object "
+				"GL_EXT_bgra";
 		default:            return (const GLubyte *)"";
 	}
 }
@@ -341,6 +347,12 @@ glGetIntegerv(GLenum pname, GLint *params)
 			break;
 		case GL_DEPTH_BITS:        *params = 24; break;
 		case GL_STENCIL_BITS:      *params = 8; break;
+		case 0x8894: /* GL_ARRAY_BUFFER_BINDING */
+			*params = (GLint)ps3gl.array_buffer;
+			break;
+		case 0x8895: /* GL_ELEMENT_ARRAY_BUFFER_BINDING */
+			*params = (GLint)ps3gl.element_buffer;
+			break;
 		default:                   *params = 0; break;
 	}
 }
@@ -379,11 +391,42 @@ void APIENTRY glHint(GLenum target, GLenum mode) { (void)target; (void)mode; }
 void APIENTRY glPointSize(GLfloat size) { (void)size; }
 void APIENTRY glLineWidth(GLfloat width) { (void)width; }
 
-/* Fog (maps with a "fog" worldspawn key, the "fog" command) isn't drawn
-   yet: the programs have no fog stage. */
-void APIENTRY glFogf(GLenum pname, GLfloat param) { (void)pname; (void)param; }
-void APIENTRY glFogi(GLenum pname, GLint param) { (void)pname; (void)param; }
-void APIENTRY glFogfv(GLenum pname, const GLfloat *params) { (void)pname; (void)params; }
+/* Fog: only kept for Polymost's program (gl_Fog in GLSL), the fixed
+   function programs have no fog stage. */
+void APIENTRY
+glFogf(GLenum pname, GLfloat param)
+{
+	switch (pname)
+	{
+		case GL_FOG_START: ps3gl.fog_start = param; break;
+		case GL_FOG_END:   ps3gl.fog_end = param; break;
+		default:           break;   /* mode, density: GLSL uses start/end */
+	}
+}
+
+void APIENTRY
+glFogi(GLenum pname, GLint param)
+{
+	glFogf(pname, (GLfloat)param);
+}
+
+void APIENTRY
+glFogfv(GLenum pname, const GLfloat *params)
+{
+	if (!params)
+	{
+		return;
+	}
+
+	if (pname == GL_FOG_COLOR)
+	{
+		memcpy(ps3gl.fog_color, params, sizeof(ps3gl.fog_color));
+	}
+	else
+	{
+		glFogf(pname, params[0]);
+	}
+}
 
 void APIENTRY
 glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
@@ -395,34 +438,6 @@ glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
 	{
 		params[0] = 1.0f;
 	}
-}
-
-/* What TyrQuake's GL_GetProcAddress asks for (gl_extensions.c) */
-void *
-PS3GL_GetProcAddress(const char *name)
-{
-	static const struct {
-		const char *name;
-		void *func;
-	} procs[] = {
-		{"glActiveTexture", (void *)glActiveTexture},
-		{"glActiveTextureARB", (void *)glActiveTexture},
-		{"glClientActiveTexture", (void *)glClientActiveTexture},
-		{"glClientActiveTextureARB", (void *)glClientActiveTexture},
-		{"glDrawRangeElements", (void *)glDrawRangeElements},
-		{"glDrawRangeElementsEXT", (void *)glDrawRangeElements},
-	};
-	size_t i;
-
-	for (i = 0; i < sizeof(procs) / sizeof(procs[0]); i++)
-	{
-		if (!strcmp(name, procs[i].name))
-		{
-			return procs[i].func;
-		}
-	}
-
-	return NULL;
 }
 
 /* Reading the RSX's memory from the CPU is very slow and screenshots

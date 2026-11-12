@@ -11862,7 +11862,9 @@ static void videoAllocateBuffers(void)
 #if defined RENDERTYPESDL || defined RENDERTYPEPS3
     if (videoGetRenderMode() == REND_CLASSIC)
     {
-# ifdef USE_OPENGL
+# if defined USE_OPENGL && !defined RENDERTYPEPS3
+        // (PS3: the classic renderer's image goes to the RSX by the layer
+        // itself, never through OpenGL)
         if (!nogl)
         {
             glsurface_initialize({ xdim, ydim });

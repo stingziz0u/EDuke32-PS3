@@ -97,10 +97,12 @@ ps3gl_apply_shader(int fp)
 {
 	gcmContextData *ctx = ps3gl.ctx;
 
-	if (!ps3gl.vp_loaded)
+	/* (Polymost's vertex program may have been loaded since: it uses
+	   the same constant registers) */
+	if (ps3gl.vp_loaded != PS3GL_VP_FIXED)
 	{
 		rsxLoadVertexProgram(ctx, vp, vp_ucode);
-		ps3gl.vp_loaded = 1;
+		ps3gl.vp_loaded = PS3GL_VP_FIXED;
 		ps3gl.mvp_uploaded = 0;
 	}
 
@@ -228,6 +230,9 @@ glDisableClientState(GLenum array)
 	}
 }
 
+/* With a buffer object bound to GL_ARRAY_BUFFER the pointer is an offset
+   into it, looked up at draw time (EDuke32 respecifies its stream buffer's
+   storage with glBufferData while the pointers stay set). */
 static void
 SetArray(ps3gl_array_t *a, GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
 {
@@ -235,6 +240,13 @@ SetArray(ps3gl_array_t *a, GLint size, GLenum type, GLsizei stride, const GLvoid
 	a->type = type;
 	a->stride = stride;
 	a->ptr = ptr;
+	a->vbo = ps3gl.array_buffer;
+}
+
+static inline const uint8_t *
+ArrayPtr(const ps3gl_array_t *a)
+{
+	return (const uint8_t *)(a->vbo ? ps3gl_buffer_ptr(a->vbo, a->ptr) : a->ptr);
 }
 
 void APIENTRY
@@ -399,24 +411,31 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 	}
 
 	sv = Stride(va);
-	pv = (const uint8_t *)va->ptr + (size_t)first * sv;
+	pv = ArrayPtr(va);
 
-	if (vc && vc->ptr)
+	if (!pv)
+	{
+		return 0;
+	}
+
+	pv += (size_t)first * sv;
+
+	if (vc && (pc = ArrayPtr(vc)) != NULL)
 	{
 		sc = Stride(vc);
-		pc = (const uint8_t *)vc->ptr + (size_t)first * sc;
+		pc += (size_t)first * sc;
 	}
 
-	if (vt0 && vt0->ptr)
+	if (vt0 && (pt0 = ArrayPtr(vt0)) != NULL)
 	{
 		st0 = Stride(vt0);
-		pt0 = (const uint8_t *)vt0->ptr + (size_t)first * st0;
+		pt0 += (size_t)first * st0;
 	}
 
-	if (vt1 && vt1->ptr)
+	if (vt1 && (pt1 = ArrayPtr(vt1)) != NULL)
 	{
 		st1 = Stride(vt1);
-		pt1 = (const uint8_t *)vt1->ptr + (size_t)first * st1;
+		pt1 += (size_t)first * st1;
 	}
 
 	/* the usual case: float positions, float texcoords, byte colors */
@@ -567,12 +586,24 @@ PrepareState(unsigned *units_out)
 		ps3gl.copy_pending = 0;
 	}
 
-	fp = ChooseFP(&units);
-
 	ps3gl_apply_states();
 	ps3gl_apply_matrices();
-	ps3gl_apply_textures(units);
-	ps3gl_apply_shader(fp);
+
+	if (ps3gl.program_polymost)
+	{
+		/* Polymost's program: its texture, the shade tables and the
+		   palette always (white where nothing is bound); the vertices
+		   only need texture coordinate 0 */
+		ps3gl_apply_textures(7);
+		ps3gl_prog_apply();
+		units = 1;
+	}
+	else
+	{
+		fp = ChooseFP(&units);
+		ps3gl_apply_textures(units);
+		ps3gl_apply_shader(fp);
+	}
 
 	ps3gl.drew = 1;
 	*units_out = units;
@@ -581,7 +612,8 @@ PrepareState(unsigned *units_out)
 static int
 PrepareDraw(unsigned *units_out)
 {
-	if (!ps3gl.ctx || !ps3gl.ring || !ps3gl.va_vertex.enabled || !ps3gl.va_vertex.ptr)
+	if (!ps3gl.ctx || !ps3gl.ring || !ps3gl.va_vertex.enabled ||
+		!(ps3gl.va_vertex.ptr || ps3gl.va_vertex.vbo))
 	{
 		return 0;
 	}
@@ -621,6 +653,9 @@ glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 	uint32_t prim, off;
 	unsigned units;
 	int i, lo = 0x7fffffff, hi = -1;
+
+	/* an offset into the bound GL_ELEMENT_ARRAY_BUFFER, if any */
+	indices = ps3gl_element_ptr(indices);
 
 	if (count <= 0 || !indices || !Prim(mode, &prim) || !PrepareDraw(&units))
 	{
@@ -865,6 +900,28 @@ glTexCoord2f(GLfloat s, GLfloat t)
 {
 	ps3gl.im_tc[0] = s;
 	ps3gl.im_tc[1] = t;
+}
+
+/* Immediate mode keeps one texture coordinate (unit 0's) */
+void APIENTRY
+glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t)
+{
+	if (target == GL_TEXTURE0)
+	{
+		ps3gl.im_tc[0] = s;
+		ps3gl.im_tc[1] = t;
+	}
+}
+
+void APIENTRY
+glRecti(GLint x1, GLint y1, GLint x2, GLint y2)
+{
+	glBegin(GL_QUADS);
+	ImVertex((float)x1, (float)y1, 0.0f);
+	ImVertex((float)x2, (float)y1, 0.0f);
+	ImVertex((float)x2, (float)y2, 0.0f);
+	ImVertex((float)x1, (float)y2, 0.0f);
+	glEnd();
 }
 
 void APIENTRY

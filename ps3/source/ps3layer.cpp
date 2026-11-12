@@ -5,6 +5,11 @@
 // the DualShock 3 as a game controller, message boxes on the TV, the
 // clock, and every way out.
 //
+// Two ways to draw: the classic renderer's 8 bit image, turned into
+// A8R8G8B8 here and scaled to the TV by the RSX; or Polymost (OpenGL, the
+// default), on the RSX through ps3gl (ps3/source/gl), drawing into a
+// render target of the internal resolution that is scaled the same way.
+//
 // Boot steps, each one a line in USRDIR/eduke32-ps3.log, so a black
 // screen can be located from the log alone (handoff notes 4.1):
 //
@@ -45,6 +50,13 @@
 #include <sys/systime.h>
 #include <sys/thread.h>
 #include <sysutil/sysutil.h>
+
+#ifdef USE_OPENGL
+# include "glbuild.h"
+# include "polymost.h"
+#endif
+
+#include <sys/mman.h>
 
 #include "ps3_platform.h"
 #include "ps3_video.h"
@@ -92,6 +104,43 @@ static char modeschecked = 0;
 // the faded palette as A8R8G8B8, for the software screen
 static uint32_t pal32[256];
 static int32_t vsync_renderlayer;
+
+#ifdef USE_OPENGL
+// ps3gl (ps3/source/gl). Its header is GL/gl.h's world, this file is
+// glad's: only what the layer calls.
+extern "C" {
+int   PS3GL_Init(int width, int height);
+void  PS3GL_BeginFrame(void);
+void  PS3GL_EndFrame(void);
+void *PS3GL_GetProcAddress(const char *name);
+}
+
+char nogl = 0;
+static int gl_loaded;       // glad has ps3gl's entry points
+static int gl_started;      // ps3gl runs on the RSX (an OpenGL mode was set)
+static int gl_frame_open;   // PS3GL_BeginFrame done for the frame being drawn
+
+static void *GLGetProc(const char *name)
+{
+    return PS3GL_GetProcAddress(name);
+}
+
+static void GLCloseFrame(void)
+{
+    if (gl_frame_open)
+    {
+        PS3GL_EndFrame();
+        gl_frame_open = 0;
+    }
+}
+
+static void GLOpenFrame(void)
+{
+    GLCloseFrame();
+    PS3GL_BeginFrame();
+    gl_frame_open = 1;
+}
+#endif
 
 #if !defined STARTUP_SETUP_WINDOW
 int32_t startwin_open(void) { return 0; }
@@ -205,6 +254,35 @@ extern "C" long sysconf(int name)
             errno = EINVAL;
             return -1;
     }
+}
+
+// No mmap on the PS3. Only the OpenGL texture cache would map its file,
+// and it's off (no texture compression): a mapping just fails.
+extern "C" void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
+{
+    UNREFERENCED_PARAMETER(addr);
+    UNREFERENCED_PARAMETER(length);
+    UNREFERENCED_PARAMETER(prot);
+    UNREFERENCED_PARAMETER(flags);
+    UNREFERENCED_PARAMETER(fd);
+    UNREFERENCED_PARAMETER(offset);
+    errno = ENOSYS;
+    return MAP_FAILED;
+}
+
+extern "C" int munmap(void *addr, size_t length)
+{
+    UNREFERENCED_PARAMETER(addr);
+    UNREFERENCED_PARAMETER(length);
+    return 0;
+}
+
+extern "C" int msync(void *addr, size_t length, int flags)
+{
+    UNREFERENCED_PARAMETER(addr);
+    UNREFERENCED_PARAMETER(length);
+    UNREFERENCED_PARAMETER(flags);
+    return 0;
 }
 
 extern "C" int gethostname(char *name, size_t len)
@@ -456,6 +534,16 @@ static void TextScreen(const char *title, const char *const *lines, int nlines)
     PS3_Video_Finish();
 
     PS3_Log("[video] text screen: %s", title ? title : "");
+
+#ifdef USE_OPENGL
+    // over an OpenGL mode: its render targets went for the text, back
+    if (bpp > 8 && gl_started && PS3_Video_SetRenderTarget(xres, yres) == 0)
+    {
+        gl_frame_open = 0;
+        PS3GL_Init(xres, yres);
+        GLOpenFrame();
+    }
+#endif
 }
 
 static void ShowText(const char *title, const char *message, const char *footer1, const char *footer2)
@@ -565,6 +653,21 @@ int32_t initsystem(void)
 
     g_numdisplays = 1;
     LOG_F(INFO, "Using the PS3 RSX video layer.");
+
+#ifdef USE_OPENGL
+    // glad's pointers right away: the engine touches GL state even in the
+    // classic renderer (videoSetRenderMode). ps3gl only keeps it until an
+    // OpenGL mode starts it on the RSX.
+    gladLoadGLLoader(GLGetProc);
+
+    if (novideo || GLVersion.major < 2)
+    {
+        LOG_F(ERROR, "No OpenGL 2 from ps3gl: only the classic renderer.");
+        nogl = 1;
+    }
+    else
+        gl_loaded = 1;
+#endif
 
     return 0;
 }
@@ -845,6 +948,7 @@ void mouseLockToWindow(char a)
 //
 // Video: the internal resolution is any of these; the RSX scales it to
 // the 720p output at its own aspect (square pixels, as the engine draws).
+// 8 bits: the classic renderer. 32 bits: Polymost (OpenGL, ps3gl).
 //
 // ---------------------------------------
 
@@ -883,15 +987,28 @@ void videoGetModes(int display)
 
     validmodecnt = 0;
 
+#ifdef USE_OPENGL
+    static int const depths[] = { 8, 32 };
+#else
+    static int const depths[] = { 8 };
+#endif
+
     for (auto const &m : ps3modes)
         for (int fs = 1; fs >= 0; --fs)
-            if (validmodecnt < MAXVALIDMODES)
+            for (int const d : depths)
             {
-                validmode[validmodecnt].xdim = m.x;
-                validmode[validmodecnt].ydim = m.y;
-                validmode[validmodecnt].bpp  = 8;
-                validmode[validmodecnt].fs   = fs;
-                validmodecnt++;
+#ifdef USE_OPENGL
+                if (d > 8 && nogl)
+                    continue;
+#endif
+                if (validmodecnt < MAXVALIDMODES)
+                {
+                    validmode[validmodecnt].xdim = m.x;
+                    validmode[validmodecnt].ydim = m.y;
+                    validmode[validmodecnt].bpp  = d;
+                    validmode[validmodecnt].fs   = fs;
+                    validmodecnt++;
+                }
             }
 
     qsort((void *)validmode, validmodecnt, sizeof(struct validmode_t), &sortmodes);
@@ -907,8 +1024,15 @@ int32_t videoCheckMode(int32_t *x, int32_t *y, int32_t c, int32_t fs, int32_t fo
 
     videoGetModes();
 
+#ifdef USE_OPENGL
+    c = (c > 8) ? 32 : 8;
+
+    if (c > 8 && nogl)
+        return -1;
+#else
     if (c > 8)
         return -1;
+#endif
 
     *x = clamp(*x & ~1, 320, MAXXDIM);
     *y = clamp(*y & ~1, 200, MAXYDIM);
@@ -963,10 +1087,45 @@ void engineEndImGuiInput(void) { }
 void engineBeginImGuiInput(void) { }
 void engineSetupImGui(void) { }
 
+#ifdef USE_OPENGL
+// Polymost's mode: the render target, ps3gl, glad. 0 ok.
+static int GLSetMode(int32_t x, int32_t y)
+{
+    if (!gl_loaded)
+        return -1;
+
+    // the frame being drawn (if any) goes with the old render target
+    GLCloseFrame();
+
+    if (PS3_Video_SetRenderTarget(x, y) != 0)
+    {
+        LOG_F(ERROR, "No %dx%d render target on the RSX.", x, y);
+        return -1;
+    }
+
+    if (PS3GL_Init(x, y) != 0)
+    {
+        LOG_F(ERROR, "ps3gl failed to start (see eduke32-ps3.log).");
+        nogl = 1;
+        return -1;
+    }
+
+    gl_started = 1;
+    return 0;
+}
+#endif
+
 int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
 {
+#ifdef USE_OPENGL
+    c = (c > 8) ? 32 : 8;
+
+    if (c > 8 && nogl)
+        return -1;
+#else
     if (c > 8)
         return -1;
+#endif
 
     if (videoCheckMode(&x, &y, c, fs, 0) < 0)
         return -1;
@@ -977,23 +1136,67 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
     if (PS3_Video_Init() != 0)
         return -1;
 
-    softsurface_destroy();
+#ifdef USE_OPENGL
+    // leaving or resizing an OpenGL mode: Polymost's textures go (as
+    // sdlayer.cpp does)
+    if (bpp > 8 && gl_started)
+        polymost_glreset();
 
-    VLOG_F(LOG_GFX, "Setting video mode %dx%d (8-bpp, scaled to the TV by the RSX).", x, y);
+    if (c > 8)
+    {
+        if (GLSetMode(x, y) != 0)
+        {
+            videoResetMode();
+            return -1;
+        }
+    }
+    else
+    {
+        GLCloseFrame();
+        softsurface_destroy();
+    }
+#else
+    softsurface_destroy();
+#endif
+
+    VLOG_F(LOG_GFX, "Setting video mode %dx%d (%s, scaled to the TV by the RSX).", x, y,
+           c > 8 ? "OpenGL on the RSX" : "8-bpp");
 
     xres = x;
     yres = y;
     bpp = c;
     fullscreen = fs;
-    numpages = 1;
+    numpages = c > 8 ? 2 : 1;
     frameplace = 0;
     lockcount = 0;
     modechange = 1;
     videomodereset = 0;
     refreshfreq = 60.0;
 
-    // brightness goes into the palette, as on DOS (palette.cpp)
-    gammabrightness = 0;
+#ifdef USE_OPENGL
+    if (c > 8)
+    {
+        // sdlayer_setvideomode_opengl
+        glShadeModel(GL_SMOOTH);
+        glClearColor(0, 0, 0, 1.0);
+        glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+        glViewport(0, 0, xres, yres);
+        glDisable(GL_DITHER);
+
+        fill_glinfo();
+
+        // brightness, contrast and saturation: Polymost's color
+        // correction (videoSetGamma), not the palette
+        gammabrightness = 1;
+
+        GLOpenFrame();
+    }
+    else
+#endif
+    {
+        // brightness goes into the palette, as on DOS (palette.cpp)
+        gammabrightness = 0;
+    }
 
     videoFadePalette(palfadergb.r, palfadergb.g, palfadergb.b, palfadedelta);
 
@@ -1088,6 +1291,23 @@ void videoShowFrame(int32_t w)
     if (offscreenrendering || novideo)
         return;
 
+#ifdef USE_OPENGL
+    if (bpp > 8)
+    {
+        if (palfadedelta)
+            fullscreen_tint_gl(palfadergb.r, palfadergb.g, palfadergb.b, palfadedelta);
+
+        // the frame to the TV (scaled like the classic image), and the
+        // next one starts in the next render target
+        GLCloseFrame();
+        PS3_Video_Present();
+        GLOpenFrame();
+
+        PS3_Pump();
+        return;
+    }
+#endif
+
     if (lockcount)
     {
         LOG_F(WARNING, "Frame was still locked at a depth of %d when videoShowFrame() was called!", lockcount);
@@ -1140,7 +1360,19 @@ int32_t videoUpdatePalette(int32_t start, int32_t num)
 
 int32_t videoSetGamma(void)
 {
-    // gammabrightness is 0: the engine brightens the palette itself
+#ifdef USE_OPENGL
+    if (bpp > 8 && !nogl)
+    {
+        g_glColorCorrection = { g_videoGamma, g_videoContrast, g_videoSaturation, 0.f };
+
+        if (videoGetRenderMode() == REND_POLYMOST)
+            polymost_setColorCorrection(g_glColorCorrection);
+
+        return 0;
+    }
+#endif
+
+    // classic: gammabrightness is 0, the engine brightens the palette itself
     return 0;
 }
 

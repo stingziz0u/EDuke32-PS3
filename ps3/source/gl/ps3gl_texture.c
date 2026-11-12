@@ -49,10 +49,35 @@
 static uint32_t *scratch;
 static size_t scratch_size;
 
+/* Swizzle tables of the last level size written into: EDuke32 puts
+   thousands of small tiles into the same big tilesheet. */
+static uint32_t *swz_tx, *swz_ty;
+static int swz_w, swz_h;
+
+/* What a unit without a texture samples in Polymost's program: white. */
+static ps3gl_texture_t white;
+
+static void BuildDescriptor(ps3gl_texture_t *t);
+
 void
 ps3gl_textures_init(void)
 {
 	/* ps3gl.textures is zeroed by calloc: no storage, name free */
+
+	white.data = (uint8_t *)rsxMemalign(128, 128);
+
+	if (white.data)
+	{
+		memset(white.data, 0xff, 128);
+		rsxAddressToOffset(white.data, &white.offset);
+		white.size = 128;
+		white.width = white.height = 1;
+		white.swizzled = 1;
+		white.max_levels = white.num_levels = 1;
+		white.min_filter = white.mag_filter = GL_NEAREST;
+		white.wrap_s = white.wrap_t = GL_REPEAT;
+		BuildDescriptor(&white);
+	}
 }
 
 static uint32_t *
@@ -176,6 +201,12 @@ ToARGB(const uint8_t *p, int bytes, GLenum format)
 	switch (bytes)
 	{
 		case 4:
+			if (format == GL_BGRA)
+			{
+				return ((uint32_t)p[3] << 24) | ((uint32_t)p[2] << 16) |
+					((uint32_t)p[1] << 8) | p[0];
+			}
+
 			return ((uint32_t)p[3] << 24) | ((uint32_t)p[0] << 16) |
 				((uint32_t)p[1] << 8) | p[2];
 		case 3:
@@ -346,6 +377,13 @@ glBindTexture(GLenum target, GLuint texture)
 	ps3gl.tmu[ps3gl.active_tmu].tex = (int)texture;
 }
 
+GLboolean APIENTRY
+glIsTexture(GLuint texture)
+{
+	return (ps3gl.textures && texture > 0 && texture < PS3GL_MAX_TEXTURES &&
+		ps3gl.textures[texture].allocated) ? GL_TRUE : GL_FALSE;
+}
+
 void APIENTRY
 glActiveTexture(GLenum texture)
 {
@@ -396,18 +434,33 @@ Upload(ps3gl_texture_t *t, int level, int x, int y, int w, int h,
 	if (t->swizzled)
 	{
 		uint32_t *dst = (uint32_t *)(t->data + LevelOffset(t->width, t->height, level));
-		uint32_t *tx = Scratch((size_t)(lw + lh) * sizeof(uint32_t) +
-				(size_t)w * h * sizeof(uint32_t));
-		uint32_t *ty, *pix;
+		uint32_t *tx, *ty, *pix;
 
-		if (!tx)
+		if (lw != swz_w || lh != swz_h)
+		{
+			free(swz_tx);
+			swz_tx = (uint32_t *)malloc((size_t)(lw + lh) * sizeof(uint32_t));
+			swz_w = swz_h = 0;
+
+			if (!swz_tx)
+			{
+				return;
+			}
+
+			swz_ty = swz_tx + lw;
+			SwizzleTables(swz_tx, swz_ty, lw, lh);
+			swz_w = lw;
+			swz_h = lh;
+		}
+
+		tx = swz_tx;
+		ty = swz_ty;
+		pix = Scratch((size_t)w * h * sizeof(uint32_t));
+
+		if (!pix)
 		{
 			return;
 		}
-
-		ty = tx + lw;
-		pix = ty + lh;
-		SwizzleTables(tx, ty, lw, lh);
 
 		if (x == 0 && y == 0 && w == lw && h == lh)
 		{
@@ -497,13 +550,23 @@ glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width,
 	{
 		int swz = IsPow2(width) && IsPow2(height);
 		int levels = swz ? Log2(width > height ? width : height) + 1 : 1;
-		uint32_t pitch = swz ? 0 : (((uint32_t)width * 4 + 63) & ~63u);
-		uint32_t size = swz ? LevelOffset(width, height, levels) : pitch * height;
+		uint32_t pitch;
+		uint32_t size;
+
+		/* GL_TEXTURE_MAX_LEVEL set first: no room for levels never used
+		   (EDuke32's tilesheets are 2048x2048, one level) */
+		if (t->max_level && levels > t->max_level)
+		{
+			levels = t->max_level;
+		}
+
+		pitch = swz ? 0 : (((uint32_t)width * 4 + 63) & ~63u);
+		size = swz ? LevelOffset(width, height, levels) : pitch * height;
 
 		/* Same shape and the RSX is done with it: reuse. Otherwise new
 		   storage; the old one is freed when the RSX is done. */
 		if (!t->data || t->width != width || t->height != height ||
-			t->swizzled != swz || Busy(t))
+			t->swizzled != swz || t->max_levels != levels || Busy(t))
 		{
 			ReleaseStorage(t);
 
@@ -605,6 +668,9 @@ TexParam(GLenum pname, GLint param)
 		case GL_TEXTURE_MAG_FILTER: t->mag_filter = (GLenum)param; break;
 		case GL_TEXTURE_WRAP_S:     t->wrap_s = (GLenum)param; break;
 		case GL_TEXTURE_WRAP_T:     t->wrap_t = (GLenum)param; break;
+		case GL_TEXTURE_MAX_LEVEL:
+			t->max_level = (uint8_t)(param < 0 ? 1 : param > 15 ? 16 : param + 1);
+			return;
 		default:                    return;   /* GL_GENERATE_MIPMAP... */
 	}
 
@@ -806,6 +872,32 @@ ps3gl_apply_textures(unsigned units)
 		}
 
 		t = &ps3gl.textures[tmu->tex];
+
+		/* only Polymost's program asks for units without a texture */
+		if (!t->data || !t->num_levels)
+		{
+			if (!white.data)
+			{
+				continue;
+			}
+
+			if (tmu->hw_tex == -3 && tmu->hw_enabled == 1)
+			{
+				continue;
+			}
+
+			rsxLoadTexture(ctx, i, &white.gt);
+			rsxTextureControl(ctx, i, GCM_TRUE, 0, 0, GCM_TEXTURE_MAX_ANISO_1);
+			rsxTextureFilter(ctx, i, 0, GCM_TEXTURE_NEAREST, GCM_TEXTURE_NEAREST,
+					GCM_TEXTURE_CONVOLUTION_QUINCUNX);
+			rsxTextureWrapMode(ctx, i, GCM_TEXTURE_REPEAT, GCM_TEXTURE_REPEAT,
+					GCM_TEXTURE_CLAMP_TO_EDGE, GCM_TEXTURE_UNSIGNED_REMAP_NORMAL,
+					GCM_TEXTURE_ZFUNC_NEVER, 0);
+			tmu->hw_tex = -3;
+			tmu->hw_enabled = 1;
+			continue;
+		}
+
 		t->last_frame = ps3gl.frame;
 
 		if (tmu->hw_tex == tmu->tex && tmu->hw_enabled == 1 && !t->dirty)

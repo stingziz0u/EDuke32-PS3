@@ -2,8 +2,9 @@
  * EDuke32-PS3: PSL1GHT has no <sys/mman.h> (no mmap on the PS3).
  *
  * texcache.h includes mio.hpp (memory-mapped files) unconditionally, but
- * only the OpenGL texture cache uses it, and the port has no OpenGL: the
- * declarations are here so the header compiles; nothing calls them.
+ * only the OpenGL texture cache uses it, and it's off on the PS3 (no
+ * texture compression). ps3layer.cpp has mmap failing, so a mapping that
+ * were ever tried would just not happen.
  */
 #ifndef PS3_COMPAT_SYS_MMAN_H
 #define PS3_COMPAT_SYS_MMAN_H

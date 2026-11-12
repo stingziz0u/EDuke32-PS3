@@ -44,6 +44,11 @@
  * The vertex ring has one segment per frame in flight; everything is
  * copied there (the game's arrays live in ordinary memory).
  *
+ * For EDuke32 (ps3gl_prog.c): GLSL program objects (Polymost's program
+ * runs as Cg programs written for it), buffer objects in main memory,
+ * fog for that program, five texture units, and every entry point by
+ * name for glad (ps3gl_procs.c). glGetString says 2.1.
+ *
  * =======================================================================
  */
 
@@ -59,8 +64,10 @@
 
 #include "GL/gl.h"
 
-#define PS3GL_MAX_TMUS          3
-#define PS3GL_MAX_TEXTURES      4096    /* texture names 1..4095 */
+/* Units 3 and 4 only exist for Polymost (detail and glow maps, which
+   aren't drawn); the fixed function programs use 0-2. */
+#define PS3GL_MAX_TMUS          5
+#define PS3GL_MAX_TEXTURES      8192    /* texture names 1..8191 */
 #define PS3GL_MATRIX_DEPTH      32
 
 /* One ring segment per frame that can be in flight (triple buffering). */
@@ -96,6 +103,11 @@ enum { PS3GL_U2_OFF, PS3GL_U2_DECAL };
 #define PS3GL_FP_INDEX(u0, u1, u2) ((u0) + 4 * ((u1) + 5 * (u2)))
 #define PS3GL_FP_COUNT 40
 
+/* active_fp / vp_loaded values when Polymost's programs are loaded */
+#define PS3GL_FP_POLYMOST       1000
+#define PS3GL_VP_FIXED          1
+#define PS3GL_VP_POLYMOST       2
+
 /* 36 byte interleaved vertex, as in IoQuake3-PS3 */
 #pragma pack(push, 1)
 typedef struct {
@@ -123,6 +135,7 @@ typedef struct {
 	uint8_t     num_levels;     /* levels uploaded (contiguous from 0) */
 	uint8_t     dirty;          /* descriptor or sampler state changed */
 	uint8_t     allocated;      /* name handed out by glGenTextures */
+	uint8_t     max_level;      /* GL_TEXTURE_MAX_LEVEL + 1, 0 = not set */
 	GLenum      min_filter, mag_filter, wrap_s, wrap_t;
 	uint32_t    last_frame;     /* last frame that drew with it */
 	gcmTexture  gt;
@@ -147,7 +160,8 @@ typedef struct {
 	GLint       size;
 	GLenum      type;
 	GLsizei     stride;
-	const void *ptr;
+	const void *ptr;            /* offset into vbo if vbo != 0 */
+	GLuint      vbo;            /* GL_ARRAY_BUFFER when the pointer was set */
 } ps3gl_array_t;
 
 typedef struct {
@@ -221,7 +235,18 @@ typedef struct {
 
 	/* shaders */
 	int         active_fp;
-	int         vp_loaded;
+	int         vp_loaded;              /* 0, PS3GL_VP_FIXED or _POLYMOST */
+
+	/* GLSL program objects (ps3gl_prog.c): 0 = fixed function */
+	GLuint      program;
+	int         program_polymost;       /* the current one is Polymost's */
+
+	/* buffer objects (ps3gl_prog.c), in main memory */
+	GLuint      array_buffer, element_buffer;
+
+	/* fog, as GLSL's gl_Fog sees it */
+	float       fog_start, fog_end;
+	float       fog_color[4];
 
 	ps3gl_texture_t *textures;          /* [PS3GL_MAX_TEXTURES] */
 
@@ -251,7 +276,8 @@ void PS3GL_LogStats(int frames);   /* 0: only resets the counters */
 /* Culling direction check (cvar gl_ps3_cullflip). */
 void PS3GL_SetCullFlip(int flip);
 
-/* For GL_GetProcAddress: the entry points TyrQuake looks up by name. */
+/* For gladLoadGLLoader: every GL entry point by name (ps3gl_procs.c).
+   Names ps3gl doesn't have get a function that does nothing. */
 void *PS3GL_GetProcAddress(const char *name);
 
 /* ---- internal ---- */
@@ -269,5 +295,11 @@ void     ps3gl_textures_init(void);
 void     ps3gl_apply_textures(unsigned units);   /* bit i: sampler i used */
 void     ps3gl_shaders_init(void);
 void     ps3gl_apply_shader(int fp);
+
+/* ps3gl_prog.c */
+void     ps3gl_prog_init(void);
+void     ps3gl_prog_apply(void);     /* Polymost's programs and constants */
+const void *ps3gl_buffer_ptr(GLuint vbo, const void *offset);
+const void *ps3gl_element_ptr(const void *indices);
 
 #endif /* PS3GL_H */

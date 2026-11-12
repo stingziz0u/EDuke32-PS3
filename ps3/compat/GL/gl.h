@@ -222,6 +222,7 @@ typedef ptrdiff_t       GLsizeiptr;
 #define GL_RGBA                         0x1908
 #define GL_LUMINANCE                    0x1909
 #define GL_LUMINANCE_ALPHA              0x190A
+#define GL_BGRA                         0x80E1
 #define GL_R3_G3_B2                     0x2A10
 #define GL_RGB4                         0x804F
 #define GL_RGB5                         0x8050
@@ -278,6 +279,8 @@ typedef ptrdiff_t       GLsizeiptr;
 
 #define GL_TEXTURE2                     0x84C2
 #define GL_TEXTURE2_ARB                 0x84C2
+#define GL_TEXTURE3                     0x84C3
+#define GL_TEXTURE4                     0x84C4
 #define GL_MAX_TEXTURE_UNITS_ARB        0x84E2
 #define GL_MAX_ELEMENTS_VERTICES        0x80E8
 #define GL_MAX_ELEMENTS_INDICES         0x80E9
