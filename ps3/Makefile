@@ -228,6 +228,12 @@ FTRACE_C_OBJS := $(patsubst %,$(OBJDIR)/ps3/gl/%.o,$(PS3GL_C))
 $(FTRACE_OBJS): CXXFLAGS += $(FTRACE_FLAGS)
 $(FTRACE_C_OBJS): PCFLAGS += $(FTRACE_FLAGS)
 
+# ps3gl and the display write RSX memory, which is cache inhibited: a
+# misaligned access there is an alignment interrupt lv2 doesn't handle
+# (the thread dies). GCC 7's store merging joins neighbouring stores into
+# wider ones (two floats -> one 8 byte std) without caring about that.
+$(FTRACE_C_OBJS) $(OBJDIR)/ps3/ps3_video.o: PCFLAGS += -fno-store-merging
+
 # The logger: std::recursive_mutex and friends on lv2 (no std threads on
 # the PPU), no pthreads, no stack traces.
 $(OBJDIR)/build/loguru.o: CXXFLAGS += -include $(CURDIR)/compat/ps3_threads.h \

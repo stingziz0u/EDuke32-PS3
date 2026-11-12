@@ -62,7 +62,7 @@ static struct {
  * crash dump, an RSX that stops leaves "didn't finish in time" in the log
  * after the last step it finished.
  */
-#define DEBUG_SYNC_DRAWS 300
+#define DEBUG_SYNC_DRAWS 32
 static int debug_draws;
 
 static int
@@ -475,6 +475,10 @@ RingAlloc(uint32_t bytes, ps3gl_vertex_t **out, uint32_t *offset)
 	return 1;
 }
 
+/* CopyVertices' staging buffer (main memory) */
+#define CV_CHUNK 1024
+static ps3gl_vertex_t cv_buf[CV_CHUNK] __attribute__((aligned(16)));
+
 /* Every element first..first+count-1 of the array must be inside its
    buffer object (or, without one, at a real address): otherwise the draw
    is dropped and logged, not a crash. */
@@ -531,7 +535,7 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 	uint32_t bytes = (uint32_t)count * PS3GL_VERTEX_SIZE;
 	const uint8_t *pv, *pc = NULL, *pt0 = NULL, *pt1 = NULL;
 	int sv, sc = 0, st0 = 0, st1 = 0;
-	ps3gl_vertex_t *out;
+	ps3gl_vertex_t *out, *ring_out;
 	uint32_t color = ps3gl.color;
 	int fast, i;
 
@@ -544,16 +548,18 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		return 0;
 	}
 
-	if (!RingAlloc(bytes, &out, ring_offset))
+	if (!RingAlloc(bytes, &ring_out, ring_offset))
 	{
 		return 0;
 	}
 
-	/* the last draws' numbers, in the log if the game thread dies */
-	PS3_Crumb("cv first", first);
-	PS3_Crumb("cv count", count);
-	PS3_Crumb("cv out", (int)(uintptr_t)out);
-	PS3_Crumb("cv vbo", (int)(va->vbo | ((vt0 ? vt0->vbo : 0xffff) << 16)));
+	/* The vertices are built in main memory and copied to the ring: the
+	   compiler joins neighbouring stores (two 0.0f become one 8 byte
+	   std), and a 36 byte vertex puts every other one off an 8 byte
+	   boundary. A misaligned access to RSX memory (cache inhibited) is
+	   an alignment interrupt lv2 doesn't handle: the game thread dies
+	   (vertex 1 of EDuke32's first rotatesprite). */
+	out = cv_buf;
 
 	sv = Stride(va);
 	pv = ArrayPtr(va);
@@ -583,19 +589,6 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		pt1 += (size_t)first * st1;
 	}
 
-	PS3_Crumb("cv pv", (int)(uintptr_t)pv);
-	PS3_Crumb("cv pt0", (int)(uintptr_t)pt0);
-
-	/* which of the two goes, if one does: reading the arrays or writing
-	   the ring */
-	{
-		volatile float probe = *(const volatile float *)pv;
-
-		(void)probe;
-		PS3_Crumb("cv read ok", 0);
-		*(volatile uint32_t *)out = 0;
-		PS3_Crumb("cv write ok", 0);
-	}
 
 	/* the usual case: float positions, float texcoords, byte colors */
 	fast = (va->type == GL_FLOAT) &&
@@ -603,13 +596,16 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		(!pt1 || (vt1->type == GL_FLOAT && vt1->size >= 2)) &&
 		(!pc || (vc->type == GL_UNSIGNED_BYTE && vc->size == 4));
 
-	PS3_Crumb(fast ? "cv loop fast" : "cv loop slow", count);
-
 	for (i = 0; i < count; i++, out++)
 	{
-		if (debug_draws < DEBUG_SYNC_DRAWS)
+		if (i == CV_CHUNK)
 		{
-			PS3_Crumb("cv vertex", i);
+			/* a chunk full: to the ring, and on with the next */
+			memcpy(ring_out, cv_buf, sizeof(cv_buf));
+			ring_out += CV_CHUNK;
+			out = cv_buf;
+			count -= CV_CHUNK;
+			i = 0;
 		}
 
 		if (fast)
@@ -697,7 +693,7 @@ CopyVertices(int first, int count, unsigned units, uint32_t *ring_offset)
 		pv += sv;
 	}
 
-	PS3_Crumb("cv loop done", count);
+	memcpy(ring_out, cv_buf, (size_t)count * PS3GL_VERTEX_SIZE);
 	return 1;
 }
 
@@ -931,7 +927,7 @@ glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum
 
 #define IM_MAX 4096
 
-static ps3gl_vertex_t im_buf[IM_MAX];
+static ps3gl_vertex_t im_buf[IM_MAX] __attribute__((aligned(16)));
 static int im_count;
 static uint16_t im_idx[IM_MAX / 4 * 6];
 
