@@ -225,8 +225,13 @@ FTRACE_OBJS := \
 	$(OBJDIR)/ps3/ps3layer.o
 FTRACE_C_OBJS := $(patsubst %,$(OBJDIR)/ps3/gl/%.o,$(PS3GL_C))
 
+# Off by default since patch 17: every call of the renderer went through
+# the ring, a real cost per frame. "make -C ps3 FTRACE=1" (after a clean)
+# for a build that leaves the trail.
+ifeq ($(FTRACE),1)
 $(FTRACE_OBJS): CXXFLAGS += $(FTRACE_FLAGS)
 $(FTRACE_C_OBJS): PCFLAGS += $(FTRACE_FLAGS)
+endif
 
 # ps3gl and the display write RSX memory, which is cache inhibited: a
 # misaligned access there is an alignment interrupt lv2 doesn't handle

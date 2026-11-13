@@ -798,8 +798,11 @@ static MenuEntry_t *MEL_OPTIONS[] = {
 
 static MenuEntry_t *MEL_CONTROLS[] = {
 #ifndef EDUKE32_ANDROID_MENU
+#ifndef __PPU__
+    // PS3: the pad
     &ME_OPTIONS_KEYBOARDSETUP,
     &ME_OPTIONS_MOUSESETUP,
+#endif
     &ME_OPTIONS_JOYSTICKSETUP,
 #else
     &ME_OPTIONS_TOUCHSETUP,
@@ -827,11 +830,15 @@ static MenuEntry_t *MEL_VIDEOSETUP[] = {
     &ME_VIDEOSETUP_RENDERER_NOPOLYMER,
 # endif
 #endif
+#ifndef __PPU__
+    // PS3: one display, always full screen, the flips wait for the vblank
+    // and pace the game (no frame limiter)
     &ME_VIDEOSETUP_DISPLAY,
     &ME_VIDEOSETUP_FULLSCREEN,
     &ME_VIDEOSETUP_BORDERLESS,
     &ME_VIDEOSETUP_VSYNC,
     &ME_VIDEOSETUP_FRAMELIMIT,
+#endif
     &ME_Space4_Redfont,
     &ME_VIDEOSETUP_APPLY,
 };
@@ -1149,7 +1156,9 @@ static MenuEntry_t ME_POLYMER_SHADOWDETAIL = MAKE_MENUENTRY("Shadow res:", &MF_R
 static MenuEntry_t *MEL_RENDERERSETUP[] = {
 #ifdef TEXFILTER_MENU_OPTIONS
     &ME_RENDERERSETUP_TEXFILTER,
-    &ME_RENDERERSETUP_ANISOTROPY,
+#ifndef __PPU__
+    &ME_RENDERERSETUP_ANISOTROPY,   // (ps3gl has no anisotropic filtering)
+#endif
 #endif
     &ME_RENDERERSETUP_HIGHTILE,
 //# ifdef USE_GLEXT
@@ -4318,7 +4327,10 @@ static void Menu_EntryOptionDidModify(MenuEntry_t *entry)
 #ifdef TEXFILTER_MENU_OPTIONS
     else if (entry == &ME_RENDERERSETUP_TEXFILTER)
     {
+#ifndef __PPU__
+        // (PS3: no joke names, "Bilinear" stays "Bilinear")
         MEO_DISPLAYSETUP_TEXFILTER.options->optionNames = MEOSN_DISPLAYSETUP_TEXFILTER[wrand() % ARRAY_SIZE(MEOSN_DISPLAYSETUP_TEXFILTER)];
+#endif
         gltexinvalidatetype(INVALIDATE_ART);
 #ifdef POLYMER
         if (videoGetRenderMode() == REND_POLYMER)

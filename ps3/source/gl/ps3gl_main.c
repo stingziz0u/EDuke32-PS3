@@ -285,14 +285,10 @@ PS3GL_BeginFrame(void)
 
 	/* every 10 s (a level running at 60 fps), a few draws of the frame
 	   are logged with what the shaders get */
-	if (ps3gl.frame % 600 == 300)
-	{
-		ps3gl_sample = 12;
-	}
-	else
-	{
-		ps3gl_sample = 0;
-	}
+	/* (ps3gl_sample > 0 logs that many draws with what the shaders get;
+	   patch 13..16 did 12 every 10 s. Off: the log writes made hitches
+	   and filled the log.) */
+	ps3gl_sample = 0;
 
 	/* once, a few frames in: what Polymost's fragment programs really get
 	   (and which version of them is right) */

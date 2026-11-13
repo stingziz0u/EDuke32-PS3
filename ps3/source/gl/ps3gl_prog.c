@@ -1496,8 +1496,15 @@ PS3GL_SelfTest(void)
 
 				for (i = 0; i < ST_POINTS; i++)
 				{
-					uint32_t v = *(volatile const uint32_t *)((const uint8_t *)rt +
+					const uint32_t *pp = (const uint32_t *)((const uint8_t *)rt +
 							(size_t)(ps3gl.screen_h / 2) * rt_pitch + (size_t)px[i] * 4);
+					uint32_t v;
+
+					/* RSX memory is write-through for the CPU but its
+					   reads are cached: patches 15 and 16 read stale
+					   lines (an earlier probe). Out of the cache first. */
+					__asm__ volatile("dcbf 0,%0\n\tsync" :: "r"(pp) : "memory");
+					v = *(volatile const uint32_t *)pp;
 
 					st_res[p][m][d][i][0] = have ? (int)((v >> 16) & 255) : -1;
 					st_res[p][m][d][i][1] = (int)((v >> 8) & 255);

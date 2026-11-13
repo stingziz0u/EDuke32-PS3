@@ -695,7 +695,7 @@ glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 	{
 		static int logged;
 
-		if (logged < 60 && t->width >= 1024 && width != 256)
+		if (logged < 0 && t->width >= 1024 && width != 256)   /* (off: patch 14's) */
 		{
 			const uint8_t *px = (const uint8_t *)pixels;
 

@@ -76,13 +76,26 @@ float4 main(
 
     float2 texCoord = lerp(frac(newCoord), saturate(newCoord), htc.zw);
     texCoord = clamp(tps.zw * texCoord, htc.xy, tps.zw - htc.xy);
+
+    /* The texel's center: indexed tiles are sampled GL_NEAREST anyway, and
+       a coordinate right on a texel edge (the outlines of the menu font,
+       tile seams) came out as the neighbour on some pixels. One texel of
+       the tilesheet is 2 * u_halfTexelSize; 0 for a texture of its own,
+       left alone. */
+    float2 sheetCoord = tps.xy + texCoord;
+    {
+        float2 texel = 2.0 * htc.xy;
+        float2 centered = (floor(sheetCoord / max(texel, 1.0e-6)) + 0.5) * texel;
+        sheetCoord = (htc.x > 0.0) ? centered : sheetCoord;
+    }
+
     /* (GLSL: texture2DGradARB with the derivatives of tc. PSL1GHT's
        cgcomp drops TXD without a word, and the tilesheets have one level
        and GL_NEAREST anyway: a plain lookup.) */
-    float4 color = tex2D(s_texture, tps.xy + texCoord);
+    float4 color = tex2D(s_texture, sheetCoord);
 
 #if DEBUG_VIEW == 2
-    return float4(tps.xy + texCoord, usePalette, 1.0);
+    return float4(sheetCoord, usePalette, 1.0);
 #elif DEBUG_VIEW == 3
     return float4(color.rgb, 1.0);
 #elif DEBUG_VIEW == 5

@@ -891,6 +891,15 @@ int engineFPSLimit(bool const throttle)
     if (r_maxfps == -2)
         return true;
 
+#ifdef __PPU__
+    // PS3: every frame is flipped on a vblank and the flip queue holds the
+    // game back (ps3_video.c): that is the frame pacing. A timer limiter
+    // on top of it (60.000 Hz against the TV's 59.94) only makes uneven
+    // frames.
+    (void)throttle;
+    return true;
+#endif
+
     g_frameDelay = calcFrameDelay(!throttle || ((unsigned)(r_maxfps-1) < (unsigned)refreshfreq) ? r_maxfps : -1);
 
     if (g_frameDelay != lastDelay)

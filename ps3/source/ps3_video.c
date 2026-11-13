@@ -38,6 +38,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef USE_OPENGL
+void PS3GL_LogStats(int frames);   /* gl/ps3gl_main.c */
+#endif
 #include <unistd.h>
 
 #include <ppu-types.h>
@@ -980,9 +984,28 @@ flip:
 	/* Frame rate in the log every 10 seconds. Not more often: every write
 	   to the HDD flashes the system's activity icon. */
 	{
-		static u64 window_start;
-		static int window_frames;
+		static u64 window_start, last_present, worst_us;
+		static int window_frames, late_frames;
 		u64 now = sysGetSystemTime();
+
+		/* frame to frame: over 20 ms = at least one vblank without a new
+		   picture (what the average hides) */
+		if (last_present)
+		{
+			u64 dt = now - last_present;
+
+			if (dt > 20000)
+			{
+				late_frames++;
+			}
+
+			if (dt > worst_us)
+			{
+				worst_us = dt;
+			}
+		}
+
+		last_present = now;
 
 		if (window_start == 0)
 		{
@@ -994,7 +1017,7 @@ flip:
 		if (now - window_start >= 10000000ull && !perf_log)
 		{
 			/* off (vid_ps3_perflog 0): just start a new window */
-#ifdef GLQUAKE
+#if defined GLQUAKE || defined USE_OPENGL
 			if (gl_mode)
 			{
 				PS3GL_LogStats(0);
@@ -1003,6 +1026,8 @@ flip:
 
 			window_start = now;
 			window_frames = 0;
+			late_frames = 0;
+			worst_us = 0;
 			prof_copy_us = prof_wait_us = prof_lock_us = 0;
 		}
 		else if (now - window_start >= 10000000ull)
@@ -1015,12 +1040,14 @@ flip:
 			if (gl_mode)
 			{
 				/* wait = the RSX is behind (GPU bound) */
-				PS3_Log("[video] %.1f fps (%dx%d, opengl%s%s): frame %.1f ms, wait %.1f, lock %.1f",
+				PS3_Log("[video] %.1f fps (%dx%d, opengl%s%s): frame %.1f ms, wait %.1f, lock %.1f; "
+						"%d late (> 20 ms), worst %.1f ms",
 						1000.0 / ms, src_w, src_h, lock30 ? ", locked 30" : "",
 						color_pass ? ", color pass" : "", ms,
 						prof_wait_us / 1000.0 / window_frames,
-						prof_lock_us / 1000.0 / window_frames);
-#ifdef GLQUAKE
+						prof_lock_us / 1000.0 / window_frames, late_frames,
+						worst_us / 1000.0);
+#if defined GLQUAKE || defined USE_OPENGL
 				PS3GL_LogStats(window_frames);
 #endif
 			}
@@ -1036,6 +1063,8 @@ flip:
 
 			window_start = now;
 			window_frames = 0;
+			late_frames = 0;
+			worst_us = 0;
 			prof_copy_us = prof_wait_us = prof_lock_us = 0;
 		}
 	}

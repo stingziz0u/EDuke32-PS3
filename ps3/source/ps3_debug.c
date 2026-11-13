@@ -63,7 +63,7 @@ PS3_Debug_ThreadStart(unsigned stack_size)
 
 	stack_hi = (uintptr_t)&here + 4096;
 	stack_lo = stack_hi - stack_size;
-	PS3_Log("[debug] function trace on (game thread stack %08x-%08x)",
+	PS3_Log("[debug] crash trail ready (game thread stack %08x-%08x; function trace only in FTRACE=1 builds)",
 			(unsigned)stack_lo, (unsigned)stack_hi);
 }
 
