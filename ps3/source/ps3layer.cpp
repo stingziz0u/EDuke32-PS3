@@ -1609,7 +1609,9 @@ static void GameMain(void)
 
     {
         extern int ps3_autotest;   // ps3_game_duke3d.cpp
-        FILE *f = fopen("autotest.txt", "r");
+        // the layer calls the real fopen (not ps3_stdio.c's): no working
+        // directory on lv2, the full path
+        FILE *f = fopen(PS3_USRDIR "/autotest.txt", "r");
 
         if (f)
         {
