@@ -3198,6 +3198,10 @@ void P_UpdateAngles(int const playerNum, input_t &input)
 // seen, and stays on it while the button is held and the enemy lives.
 // Moving and strafing stay free (circling a target).
 
+#ifdef __PPU__
+void PS3_Autotest_Input(int playerNum, input_t &input);
+#endif
+
 // the middle of a sprite, height wise
 static int32_t P_LockOnZ(spritetype const *pSprite)
 {
@@ -3572,6 +3576,10 @@ void P_GetInput(int const playerNum)
     }
 
     P_LockOn(playerNum, input);
+
+#ifdef __PPU__
+    PS3_Autotest_Input(playerNum, input);   // ps3/source/ps3_game_duke3d.cpp
+#endif
 
     // for access in the events
     input.bits = localInput.bits;

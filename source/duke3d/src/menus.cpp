@@ -1365,6 +1365,17 @@ static MenuOptionSet_t MEOS_SOUND_MIDIDRIVER = MAKE_MENUOPTIONSET( MEOSN_SOUND_M
 static MenuOption_t MEO_SOUND_MIDIDRIVER = MAKE_MENUOPTION( &MF_Redfont, &MEOS_SOUND_MIDIDRIVER, &musicdevice );
 static MenuEntry_t ME_SOUND_MIDIDRIVER = MAKE_MENUENTRY( "MIDI driver:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_SOUND_MIDIDRIVER, Option );
 
+#ifdef __PPU__
+// PS3: the music's synthesizer in the Sound menu itself, applied at once:
+// the OPL3 (the original's sound) or a SoundFont (the first .sf2 in
+// USRDIR, or the bank picked in Device configuration)
+static int32_t ps3musicsynth;
+static char const *MEOSN_SOUND_PS3SYNTH[] = { "Original", "SoundFont" };
+static MenuOptionSet_t MEOS_SOUND_PS3SYNTH = MAKE_MENUOPTIONSET( MEOSN_SOUND_PS3SYNTH, NULL, 0x2 );
+static MenuOption_t MEO_SOUND_PS3SYNTH = MAKE_MENUOPTION( &MF_Redfont, &MEOS_SOUND_PS3SYNTH, &ps3musicsynth );
+static MenuEntry_t ME_SOUND_PS3SYNTH = MAKE_MENUENTRY( "Music synth:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_SOUND_PS3SYNTH, Option );
+#endif
+
 static MenuLink_t MEO_SOUND_DEVSETUP = { MENU_SOUND_DEVSETUP, MA_Advance, };
 static MenuEntry_t ME_SOUND_DEVSETUP = MAKE_MENUENTRY( "Device configuration", &MF_Redfont, &MEF_BigOptionsRt, &MEO_SOUND_DEVSETUP, Link );
 
@@ -1381,6 +1392,9 @@ static MenuEntry_t *MEL_SOUND[] = {
     &ME_SOUND_VOLUME_VOICE,
     &ME_SOUND_MUSIC,
     &ME_SOUND_VOLUME_MUSIC,
+#ifdef __PPU__
+    &ME_SOUND_PS3SYNTH,
+#endif
     &ME_SOUND_DUKETALK,
 #ifndef EDUKE32_RETAIL_MENU
     &ME_SOUND_DEVSETUP,
@@ -1391,7 +1405,9 @@ static MenuEntry_t *MEL_SOUND_DEVSETUP[] = {
     &ME_SOUND_SAMPLINGRATE,
 #ifndef EDUKE32_RETAIL_MENU
     &ME_SOUND_NUMVOICES,
-    &ME_SOUND_MIDIDRIVER,
+#ifndef __PPU__
+    &ME_SOUND_MIDIDRIVER,   // (PS3: "Music synth" in the Sound menu)
+#endif
 #ifdef __linux__
     &ME_SOUND_ALSADEVICE,
 #endif
@@ -3914,6 +3930,9 @@ static void Menu_RefreshSoundProperties()
     soundrate    = ud.config.MixRate;
     soundvoices  = ud.config.NumVoices;
     musicdevice  = ud.config.MusicDevice;
+#ifdef __PPU__
+    ps3musicsynth = (ud.config.MusicDevice == ASS_SF2);
+#endif
     opl3stereo   = AL_Stereo;
 #ifdef FORMAT_UPGRADE_ELIGIBLE
     extmusic     = g_maybeUpgradeMusic;
@@ -4315,6 +4334,25 @@ static void Menu_EntryOptionDidModify(MenuEntry_t *entry)
 {
 #ifdef USE_OPENGL
     int domodechange = 0;
+#endif
+
+#ifdef __PPU__
+    if (entry == &ME_SOUND_PS3SYNTH)
+    {
+        int const device = ps3musicsynth ? ASS_SF2 : ASS_OPL3;
+
+        if (device != ud.config.MusicDevice)
+        {
+            S_MusicShutdown();
+            ud.config.MusicDevice = device;
+            S_MusicStartup();   // no .sf2: falls back to the OPL3
+            S_RestartMusic();
+        }
+
+        musicdevice   = ud.config.MusicDevice;
+        ps3musicsynth = (ud.config.MusicDevice == ASS_SF2);
+        return;
+    }
 #endif
 
     if (entry == &ME_GAMESETUP_AIM_AUTO ||
@@ -5297,6 +5335,9 @@ static void Menu_AboutToStartDisplaying(Menu_t * m)
     case MENU_SOUND_INGAME:
     case MENU_SOUND_SF2:
         Bstrcpy(sf2bankfile, SF2_BankFile);
+#ifdef __PPU__
+        ps3musicsynth = (ud.config.MusicDevice == ASS_SF2);
+#endif
         break;
 #endif
 

@@ -6472,6 +6472,10 @@ void Net_DedicatedServerStdin(void)
 }
 #endif
 
+#ifdef __PPU__
+void PS3_Autotest_Tick(void);
+#endif
+
 void drawframe_do(void)
 {
     MICROPROFILE_SCOPEI("Game", EDUKE32_FUNCTION, MP_YELLOWGREEN);
@@ -7152,6 +7156,10 @@ MAIN_LOOP_RESTART:
         g_gameUpdateAndDrawTime = g_gameUpdateTime + (double)g_lastFrameDuration * 1000.0 / (double)timerGetNanoTickRate();
 
         G_DoCheats();
+
+#ifdef __PPU__
+        PS3_Autotest_Tick();   // USRDIR/autotest.txt (ps3/source/ps3_game_duke3d.cpp)
+#endif
 
         if (myplayer.gm & MODE_NEWGAME)
             goto MAIN_LOOP_RESTART;

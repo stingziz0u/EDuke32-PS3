@@ -1600,10 +1600,27 @@ static void GameMain(void)
     // which is USRDIR (ps3_stdio.c), not in a .config folder in a home
     static char arg0[] = "eduke32";
     static char arg1[] = "-usecwd";
-    static char *argv[] = { arg0, arg1, nullptr };
+    // autotest (USRDIR/autotest.txt): straight into E1L1, the hardest skill
+    static char arg2[] = "-v1", arg3[] = "-l1", arg4[] = "-s4";
+    static char *argv[] = { arg0, arg1, nullptr, nullptr, nullptr, nullptr };
     int argc = 2;
 
     PS3_Log("[1] game thread running");
+
+    {
+        extern int ps3_autotest;   // ps3_game_duke3d.cpp
+        FILE *f = fopen("autotest.txt", "r");
+
+        if (f)
+        {
+            fclose(f);
+            ps3_autotest = 1;
+            argv[argc++] = arg2;
+            argv[argc++] = arg3;
+            argv[argc++] = arg4;
+            PS3_Log("[autotest] on (autotest.txt): every level by itself, [autotest] lines in this log");
+        }
+    }
 
     if (sysUtilRegisterCallback(0, SysutilCallback, NULL) == 0)
     {

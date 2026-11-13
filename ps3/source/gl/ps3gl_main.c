@@ -472,92 +472,21 @@ glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params)
 	}
 }
 
-/* The render target, read back (EDuke32: the savegame's picture). The
-   RSX copies the rectangle into main memory (the IO buffer, its DMA unit
-   is coherent with the CPU) and is waited for; then it's turned upside
-   down (GL's rows go bottom up) and from ARGB words into the format asked.
-   Reading the RSX's own memory from the CPU gave stale data. */
+/* Black. Patch 22 had the RSX copy the render target into main memory
+   for the savegame's picture: saving froze on hardware. The savegame
+   picture stays black (not a priority). */
 void APIENTRY
 glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
 		GLenum type, GLvoid *pixels)
 {
 	int bpp = (format == GL_RGBA || format == GL_BGRA) ? 4 : 3;
-	uint32_t rt_off, rt_pitch, off;
-	void *scratch;
-	int src_y, r, c;
 
+	(void)x;
+	(void)y;
 	(void)type;
 
-	if (!pixels || width <= 0 || height <= 0)
-	{
-		return;
-	}
-
-	if (!ready || x < 0 || y < 0 || x + width > ps3gl.screen_w || y + height > ps3gl.screen_h ||
-		PS3_Video_RenderTargetInfo(&rt_off, &rt_pitch) != 0 ||
-		PS3_Video_IOScratch((unsigned)(width * height * 4), &scratch, &off) != 0)
+	if (pixels && width > 0 && height > 0)
 	{
 		memset(pixels, 0, (size_t)width * height * bpp);
-		return;
-	}
-
-	src_y = ps3gl.screen_h - y - height;
-
-	rsxSetWaitForIdle(ps3gl.ctx);       /* the drawing done */
-	rsxSetTransferData(ps3gl.ctx, GCM_TRANSFER_LOCAL_TO_MAIN, off, (u32)width * 4,
-			rt_off + (u32)src_y * rt_pitch + (u32)x * 4, rt_pitch, (u32)width * 4, (u32)height);
-	rsxSetWaitForIdle(ps3gl.ctx);       /* the copy done */
-	PS3_Video_Finish();
-	ps3gl.drew = 0;
-
-	/* nothing of an earlier readback left in the CPU's cache */
-	for (r = 0; r < width * height * 4; r += 128)
-	{
-		__asm__ volatile("dcbf 0,%0" :: "r"((uint8_t *)scratch + r) : "memory");
-	}
-
-	__asm__ volatile("sync" ::: "memory");
-
-	for (r = 0; r < height; r++)
-	{
-		const uint32_t *srow = (const uint32_t *)scratch + (size_t)(height - 1 - r) * width;
-		uint8_t *drow = (uint8_t *)pixels + (size_t)r * width * bpp;
-
-		for (c = 0; c < width; c++)
-		{
-			uint32_t v = srow[c];     /* 0xAARRGGBB */
-			uint8_t *d = drow + c * bpp;
-
-			if (format == GL_BGRA)
-			{
-				d[0] = (uint8_t)v;
-				d[1] = (uint8_t)(v >> 8);
-				d[2] = (uint8_t)(v >> 16);
-			}
-			else
-			{
-				d[0] = (uint8_t)(v >> 16);
-				d[1] = (uint8_t)(v >> 8);
-				d[2] = (uint8_t)v;
-			}
-
-			if (bpp == 4)
-			{
-				d[3] = (uint8_t)(v >> 24);
-			}
-		}
-	}
-
-	{
-		static int logged;
-
-		if (logged < 3)
-		{
-			const uint32_t *mid = (const uint32_t *)scratch + (size_t)(height / 2) * width + width / 2;
-
-			PS3_Log("[gl] glReadPixels %dx%d at %d,%d: middle pixel %08x", width, height, x, y,
-					(unsigned)*mid);
-			logged++;
-		}
 	}
 }
