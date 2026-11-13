@@ -76,6 +76,10 @@ void PS3_Video_SetColor(float brightness, float exponent);
    0: flip on the next vblank (up to 60). */
 void PS3_Video_SetLock30(int lock);
 
+/* Main memory the RSX can write to (8 MB at most), for readbacks: CPU
+   pointer and RSX offset. 0 ok. */
+int PS3_Video_IOScratch(unsigned size, void **ptr, unsigned *offset);
+
 /* Now, on the vblank grid: the time of the vblank the frame starts on
    (the game clock, ps3layer.cpp's clock_gettime). */
 unsigned long long PS3_Video_PacedMicros(void);

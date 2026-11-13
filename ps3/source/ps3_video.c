@@ -147,6 +147,33 @@ VBlankHandler(const u32 head)
  * wait can return before the vblank handler has run for that vblank). A
  * plain clock until the handler has measured the period.
  */
+/* A piece of the IO buffer (main memory the RSX can write) for reading
+   the picture back (glReadPixels): 8 MB past its start, the command buffer
+   is the first 1 MB and nothing else uses the rest. */
+#define IO_SCRATCH_OFF  (8u * 1024 * 1024)
+#define IO_SCRATCH_SIZE (8u * 1024 * 1024)
+
+int
+PS3_Video_IOScratch(unsigned size, void **ptr, unsigned *offset)
+{
+	u32 off;
+
+	if (!ready || !io_buffer || size > IO_SCRATCH_SIZE)
+	{
+		return -1;
+	}
+
+	*ptr = (u8 *)io_buffer + IO_SCRATCH_OFF;
+
+	if (rsxAddressToOffset(*ptr, &off) != 0)
+	{
+		return -1;
+	}
+
+	*offset = off;
+	return 0;
+}
+
 unsigned long long
 PS3_Video_PacedMicros(void)
 {

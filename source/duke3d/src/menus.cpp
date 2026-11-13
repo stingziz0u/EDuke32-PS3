@@ -2951,13 +2951,23 @@ static void Menu_PreDrawBackground(MenuID_t cm, const vec2_t origin)
 }
 
 
+#ifdef __PPU__
+# define PS3_PRESS_ANY "Press any button"
+#else
+# define PS3_PRESS_ANY "Press any key or button"
+#endif
+
 static void Menu_DrawVerifyPrompt(int32_t x, int32_t y, const char * text, int numlines = 1)
 {
     mgametextcenter(x, y + (90<<16), text);
 #ifndef EDUKE32_ANDROID_MENU
+#ifdef __PPU__
+    char const * inputs = "Cross: accept, Circle: return";
+#else
     char const * inputs = CONTROL_LastSeenInput == LastSeenInput::Joystick
         ? "Press (A) to accept, (B) to return."
         : "(Y/N)";
+#endif
     mgametextcenter(x, y + (90<<16) + MF_Bluefont.get_yline() * numlines, inputs);
 #endif
 }
@@ -3367,7 +3377,7 @@ static void Menu_PreDraw(MenuID_t cm, MenuEntry_t* entry, const vec2_t origin)
                                                        "the complete version and get\n"
                                                        "the final three episodes.");
 
-        mgametextcenter(origin.x, origin.y + ((148+16)<<16), "Press any key or button...");
+        mgametextcenter(origin.x, origin.y + ((148+16)<<16), PS3_PRESS_ANY "...");
         break;
 #endif
     case MENU_CREDITS:
@@ -3699,7 +3709,11 @@ static void Menu_PreOptionListDraw(MenuEntry_t *entry, const vec2_t origin)
 
         mgametextcenter(origin.x, origin.y + ((31+9)<<16), tempbuf);
 
+#ifdef __PPU__
+        mgametextcenter(origin.x, origin.y + (161<<16), "Circle To Cancel");
+#else
         mgametextcenter(origin.x, origin.y + (161<<16), "Press \"Escape\" To Cancel");
+#endif
         break;
     }
 }

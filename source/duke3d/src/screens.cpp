@@ -35,6 +35,12 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "sbar.h"
 #include "screens.h"
 
+#ifdef __PPU__
+# define PS3_PRESS_ANY_CONTINUE "Press any button to continue"
+#else
+# define PS3_PRESS_ANY_CONTINUE "Press any key or button to continue"
+#endif
+
 #define COLOR_RED redcol
 #define COLOR_WHITE whitecol
 
@@ -2176,7 +2182,7 @@ static void G_DisplayMPResultsScreen(void)
     gametext_center(58+2, "Multiplayer Totals");
     gametext_center(58+10, g_mapInfo[G_LastMapInfoIndex()].name);
 
-    gametext_center_shade(165, "Press any key or button to continue", quotepulseshade);
+    gametext_center_shade(165, PS3_PRESS_ANY_CONTINUE, quotepulseshade);
 
     minitext(38, 80, "Name", 8, 2+8+16+128);
     minitext(269, 80, "Kills", 8, 2+8+16+128);
@@ -2391,7 +2397,7 @@ void G_BonusScreen(int32_t bonusonly)
         menutext_center(20-6, lastmapname);
     menutext_center(36-6, "Completed");
 
-    gametext_center_shade(192, "Press any key or button to continue", quotepulseshade);
+    gametext_center_shade(192, PS3_PRESS_ANY_CONTINUE, quotepulseshade);
 
     if (ud.config.MusicToggle)
         S_PlaySound(BONUSMUSIC);
@@ -2472,7 +2478,7 @@ void G_BonusScreen(int32_t bonusonly)
                     menutext_center(20-6, lastmapname);
                 menutext_center(36-6, "Completed");
 
-                gametext_center_shade(192, "Press any key or button to continue", quotepulseshade);
+                gametext_center_shade(192, PS3_PRESS_ANY_CONTINUE, quotepulseshade);
 
                 if (totalclock > (60*3))
                 {
