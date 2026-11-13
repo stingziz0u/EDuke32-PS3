@@ -42,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 #include "ps3gl.h"
 #include "ps3gl_polymost_data.h"
@@ -787,10 +788,22 @@ ps3gl_prog_apply(void)
 	memcpy(k[9], p->u[U_TEXTUREPOSSIZE], 4 * sizeof(float));
 	Set4(k[10], p->u[U_HALFTEXELSIZE][0], p->u[U_HALFTEXELSIZE][1],
 			p->u[U_CLAMP][0], p->u[U_CLAMP][1]);
-	Set4(k[11], p->u[U_PALSWAPPOS][0], p->u[U_PALSWAPPOS][1],
-			p->u[U_PALSWAPSIZE][0], p->u[U_PALSWAPSIZE][1]);
-	Set4(k[12], p->u[U_SHADE][0], p->u[U_NUMSHADES][0], p->u[U_NUMSHADES][1],
-			p->u[U_VISFACTOR][0]);
+	/* The shade table lookup lands exactly on texel edges when
+	   u_palswapPos has no half texel in it (the menus), and these values
+	   come interpolated, a hair off from pixel to pixel: some pixels took
+	   the next column or row (speckles). A quarter texel of the shade
+	   table texture in, and the integer shade a bit above itself, keep
+	   every lookup inside its texel. */
+	{
+		const ps3gl_texture_t *pt = &ps3gl.textures[ps3gl.tmu[1].tex];
+		float qx = pt->width ? 0.25f / (float)pt->width : 0.0f;
+		float qy = pt->height ? 0.25f / (float)pt->height : 0.0f;
+
+		Set4(k[11], p->u[U_PALSWAPPOS][0] + qx, p->u[U_PALSWAPPOS][1] + qy,
+				p->u[U_PALSWAPSIZE][0], p->u[U_PALSWAPSIZE][1]);
+	}
+	Set4(k[12], p->u[U_SHADE][0] + (1.0f / 256.0f), p->u[U_NUMSHADES][0],
+			p->u[U_NUMSHADES][1], p->u[U_VISFACTOR][0]);
 	Set4(k[13], p->u[U_COLORCORRECTION][0] - 1.0f, p->u[U_USECOLORONLY][0],
 			p->u[U_USEPALETTE][0], p->u[U_SHADEINTERPOLATE][0]);
 	Set4(k[14], p->u[U_NPOTEMULATION][0],
@@ -1366,6 +1379,35 @@ StLine(char *buf, size_t size, const char *head, int vals[ST_DRAWS][ST_POINTS][4
 	}
 }
 
+/* Waits until the pixels of everything drawn so far are in memory: a
+   back end label is written after the raster operations are done (the
+   reference value only says the commands were read: patch 15 read the
+   draw before the last one). */
+#define ST_LABEL 69
+
+static void
+StWaitPixels(gcmContextData *ctx)
+{
+	static u32 seq = 0x5e1f0000u;
+	volatile u32 *label = (volatile u32 *)gcmGetLabelAddress(ST_LABEL);
+	int waited = 0;
+
+	seq++;
+	rsxSetWriteBackendLabel(ctx, ST_LABEL, seq);
+	rsxFlushBuffer(ctx);
+
+	while (*label != seq)
+	{
+		usleep(20);
+
+		if (++waited > 100000)
+		{
+			PS3_Log("[selftest] WARNING: the label never came (%08x)", (unsigned)*label);
+			break;
+		}
+	}
+}
+
 void
 PS3GL_SelfTest(void)
 {
@@ -1449,8 +1491,7 @@ PS3GL_SelfTest(void)
 				if (have)
 				{
 					StQuad(d);
-					rsxSetWaitForIdle(ctx);     /* the pixels written, not only the commands read */
-					PS3_Video_Finish();
+					StWaitPixels(ctx);
 				}
 
 				for (i = 0; i < ST_POINTS; i++)
