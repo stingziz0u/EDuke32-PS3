@@ -2355,6 +2355,44 @@ static void C_ReplaceQuoteSubstring(const size_t q, char const * const query, ch
 }
 #endif
 
+#ifdef __PPU__
+// PS3: "PRESS Open TO RESTART LEVEL" names the DualShock 3 button bound to
+// Open instead ("PRESS Cross TO RESTART LEVEL"); updated every time the
+// quote shows (P_DoQuote), so a rebind is followed. The gamefunc's name
+// if no button has it.
+void C_PS3_UpdateDeadQuote(void)
+{
+    // the layer's button order (ps3layer.cpp, SDL's game controller order)
+    static char const *const buttonNames[] =
+    {
+        "Cross", "Circle", "Square", "Triangle", "Select", "PS", "Start",
+        "L3", "R3", "L1", "R1", "Up", "Down", "Left", "Right",
+    };
+    static char current[32];
+
+    if (!apStrings[QUOTE_DEAD])
+        return;
+
+    char const *want = gamefunctions[gamefunc_Open];
+
+    for (int i = 0; i < ARRAY_SSIZE(buttonNames); i++)
+        if (ud.config.JoystickFunctions[i][0] == gamefunc_Open)
+        {
+            want = buttonNames[i];
+            break;
+        }
+
+    // what the quote says now: the last name put in, or C_InitQuotes's
+    char const *have = current[0] ? current : gamefunctions[gamefunc_Open];
+
+    if (Bstrcmp(have, want) && Bstrstr(apStrings[QUOTE_DEAD], have))
+        C_ReplaceQuoteSubstring(QUOTE_DEAD, have, want);
+
+    if (Bstrstr(apStrings[QUOTE_DEAD], want))
+        Bstrncpyz(current, want, sizeof(current));
+}
+#endif
+
 void C_InitQuotes(void)
 {
     for (int i = 0; i < 128; i++) C_AllocQuote(i);
@@ -2366,6 +2404,9 @@ void C_InitQuotes(void)
     C_ReplaceQuoteSubstring(QUOTE_DEAD, "SPACE", OpenGameFunc);
     C_ReplaceQuoteSubstring(QUOTE_DEAD, "OPEN", OpenGameFunc);
     C_ReplaceQuoteSubstring(QUOTE_DEAD, "USE", OpenGameFunc);
+#endif
+#ifdef __PPU__
+    C_PS3_UpdateDeadQuote();
 #endif
 
     // most of these are based on Blood, obviously

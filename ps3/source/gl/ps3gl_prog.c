@@ -790,7 +790,12 @@ ps3gl_prog_apply(void)
 		/* the plain result, and the draw needs no NPOT emulation and no
 		   color correction: the short program (and without the second
 		   shade lookup if shade interpolation is off) */
-		if (pm_fast_on && v->fp == 0 && v->mode < 0 && p->u[U_NPOTEMULATION][2] == 0.0f &&
+		if (pm_fast_on && v->fp == 0 && v->mode < 0 && p->u[U_USECOLORONLY][0] != 0.0f)
+		{
+			/* color only (fades, rectangles): no texture lookups at all */
+			fast = pm_fast_ok[2] ? 3 : 0;
+		}
+		else if (pm_fast_on && v->fp == 0 && v->mode < 0 && p->u[U_NPOTEMULATION][2] == 0.0f &&
 			p->u[U_COLORCORRECTION][0] == 1.0f && p->u[U_COLORCORRECTION][1] == 1.0f &&
 			p->u[U_COLORCORRECTION][2] == 1.0f)
 		{

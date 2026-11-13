@@ -535,6 +535,10 @@ void G_PrintGameQuotes(int32_t snum)
     }
 }
 
+#ifdef __PPU__
+void C_PS3_UpdateDeadQuote(void);
+#endif
+
 void P_DoQuote(int32_t q, DukePlayer_t *p)
 {
     int32_t cq = 0;
@@ -547,6 +551,11 @@ void P_DoQuote(int32_t q, DukePlayer_t *p)
         cq = 1;
         q &= ~MAXQUOTES;
     }
+
+#ifdef __PPU__
+    if (q == QUOTE_DEAD)
+        C_PS3_UpdateDeadQuote();
+#endif
 
     if (EDUKE32_PREDICT_FALSE(apStrings[q] == NULL))
     {

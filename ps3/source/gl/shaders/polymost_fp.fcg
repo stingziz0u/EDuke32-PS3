@@ -37,7 +37,11 @@
      1  no NPOT emulation (u_npotEmulation.z 0), no color correction
         (u_colorCorrection 1 1 1): the common case, ~20 instructions less
      2  as 1, and no shade interpolation (u_shadeInterpolate 0): one shade
-        table and one palette lookup instead of two each */
+        table and one palette lookup instead of two each
+     3  u_useColorOnly (full screen tints, menu rectangles): the vertex
+        color, fog and color correction; no texture at all (the full
+        program over the whole screen, for a fade, cost the RSX enough to
+        drop the menus that fade the screen to 30 fps) */
 #ifndef FAST
 #define FAST 0
 #endif
@@ -73,6 +77,20 @@ float4 main(
         float ci = tex2D(s_palswap, float2(idx, 0.0) * psw.zw + psw.xy).r * (255.0 / 256.0) + (0.5 / 256.0);
         float4 pc = tex2D(s_palette, float2(ci, 0.0));
         return float4(lerp(float3(idx, idx, idx), pc.rgb, usePalette), 1.0);
+    }
+#endif
+
+#if FAST == 3
+    {
+        /* what the full program gives with u_useColorOnly 1: the texture
+           is white, nothing is fullbright */
+        float4 c = vcol;
+        c.rgb = lerp(fogc.rgb, c.rgb, saturate(t0.w));
+        float l = dot(c.rgb, float3(0.2126, 0.7152, 0.0722));
+        c.rgb = lerp(float3(l, l, l), c.rgb, fogc.w);
+        c.rgb = npot.w * c.rgb + (0.5 * (1.0 - npot.w)) * c.a;
+        c.rgb = c.rgb + fl.x * c.a;
+        return c;
     }
 #endif
 
