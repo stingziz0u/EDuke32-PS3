@@ -609,7 +609,14 @@ static MenuEntry_t ME_VIDEOSETUP_VSYNC = MAKE_MENUENTRY("VSync:", &MF_Redfont, &
 
 
 
-#if 1
+#if defined __PPU__
+// PS3: 60 (every vblank) or 30 (every second one), ps3_video.c's flips
+static char const *MEOSN_VIDEOSETUP_FRAMELIMIT [] = { "60 fps", "30 fps" };
+static int32_t MEOSV_VIDEOSETUP_FRAMELIMIT [] = { -1, 30 };
+static MenuOptionSet_t MEOS_VIDEOSETUP_FRAMELIMIT = MAKE_MENUOPTIONSET(MEOSN_VIDEOSETUP_FRAMELIMIT, MEOSV_VIDEOSETUP_FRAMELIMIT, 0x0);
+static MenuOption_t MEO_VIDEOSETUP_FRAMELIMIT= MAKE_MENUOPTION(&MF_Redfont, &MEOS_VIDEOSETUP_FRAMELIMIT, &newmaxfps);
+static MenuEntry_t ME_VIDEOSETUP_FRAMELIMIT = MAKE_MENUENTRY("Framerate limit:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_VIDEOSETUP_FRAMELIMIT, Option);
+#elif 1
 static char const *MEOSN_VIDEOSETUP_FRAMELIMIT [] = { "Auto", "None", "30 fps", "58 fps", "59 fps", "60 fps", "61 fps", "72 fps", "73 fps", "74 fps", "75 fps", "83 fps", "84 fps", "85 fps", "100 fps", "118 fps", "119 fps", "120 fps", "142 fps", "143 fps", "144 fps", "163 fps", "164 fps", "165 fps", "238 fps", "239 fps", "240 fps" };
 static int32_t MEOSV_VIDEOSETUP_FRAMELIMIT [] = { -1, 0, 30, 58, 59, 60, 61, 72, 73, 74, 75, 83, 84, 85, 100, 118, 119, 120, 142, 143, 144, 163, 164, 165, 238, 239, 240 };
 static MenuOptionSet_t MEOS_VIDEOSETUP_FRAMELIMIT = MAKE_MENUOPTIONSET(MEOSN_VIDEOSETUP_FRAMELIMIT, MEOSV_VIDEOSETUP_FRAMELIMIT, 0x0);
@@ -831,14 +838,13 @@ static MenuEntry_t *MEL_VIDEOSETUP[] = {
 # endif
 #endif
 #ifndef __PPU__
-    // PS3: one display, always full screen, the flips wait for the vblank
-    // and pace the game (no frame limiter)
+    // PS3: one display, always full screen, always on the vblank
     &ME_VIDEOSETUP_DISPLAY,
     &ME_VIDEOSETUP_FULLSCREEN,
     &ME_VIDEOSETUP_BORDERLESS,
     &ME_VIDEOSETUP_VSYNC,
-    &ME_VIDEOSETUP_FRAMELIMIT,
 #endif
+    &ME_VIDEOSETUP_FRAMELIMIT,
     &ME_Space4_Redfont,
     &ME_VIDEOSETUP_APPLY,
 };
@@ -1011,7 +1017,9 @@ static MenuLink_t MEO_JOYSTICK_DEFAULTS = { MENU_JOYDEFAULTVERIFY, MA_None, };
 static MenuEntry_t ME_JOYSTICK_DEFAULTS = MAKE_MENUENTRY( "Reset To Defaults", &MF_Redfont, &MEF_BigOptionsRtSections, &MEO_JOYSTICK_DEFAULTS, Link );
 
 static MenuEntry_t *MEL_JOYSTICKSETUP[] = {
-    &ME_JOYSTICK_ENABLE,
+#ifndef __PPU__
+    &ME_JOYSTICK_ENABLE,    // (PS3: the pad is always on)
+#endif
     &ME_JOYSTICK_HORIZONTALAIMSENSITIVITY,
     &ME_JOYSTICK_VERTICALAIMSENSITIVITY,
     &ME_JOYSTICK_RUMBLE,

@@ -883,6 +883,10 @@ void maybe_redirect_outputs(void)
 #endif
 }
 
+#ifdef __PPU__
+extern "C" void PS3_Video_SetLock30(int lock);  // ps3/source/ps3_video.c
+#endif
+
 int engineFPSLimit(bool const throttle)
 {
     static uint64_t lastFrameTicks;
@@ -895,7 +899,8 @@ int engineFPSLimit(bool const throttle)
     // PS3: every frame is flipped on a vblank and the flip queue holds the
     // game back (ps3_video.c): that is the frame pacing. A timer limiter
     // on top of it (60.000 Hz against the TV's 59.94) only makes uneven
-    // frames.
+    // frames. r_maxfps 30: a flip every second vblank.
+    PS3_Video_SetLock30(r_maxfps == 30);
     (void)throttle;
     return true;
 #endif

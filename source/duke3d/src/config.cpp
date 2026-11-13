@@ -826,6 +826,9 @@ int CONFIG_ReadSetup(void)
 #endif
 
     SCRIPT_GetNumber(ud.config.scripthandle, "Controls", "UseJoystick", &ud.setup.usejoystick);
+#ifdef __PPU__
+    ud.setup.usejoystick = 1;   // the PS3 has nothing else
+#endif
     SCRIPT_GetNumber(ud.config.scripthandle, "Controls", "UseMouse", &ud.setup.usemouse);
 
     // restore localization

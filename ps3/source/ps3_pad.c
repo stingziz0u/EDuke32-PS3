@@ -231,3 +231,35 @@ done:
 	out->lx = data.button[6];
 	out->ly = data.button[7];
 }
+
+/* Vibration: the DualShock 3's two motors (small: on / off, large: 0..255)
+   on the active pad. Sent only when it changes. */
+void
+PS3_Pad_SetRumble(int small_on, int large)
+{
+	static int last_small = -1, last_large = -1, last_port = -1;
+	padActParam act;
+
+	if (!initialized || !connected || port < 0)
+	{
+		last_small = last_large = -1;
+		return;
+	}
+
+	small_on = small_on ? 1 : 0;
+	large = large < 0 ? 0 : (large > 255 ? 255 : large);
+
+	if (small_on == last_small && large == last_large && port == last_port)
+	{
+		return;
+	}
+
+	memset(&act, 0, sizeof(act));
+	act.small_motor = (u8)small_on;
+	act.large_motor = (u8)large;
+	ioPadSetActDirect((u32)port, &act);
+
+	last_small = small_on;
+	last_large = large;
+	last_port = port;
+}

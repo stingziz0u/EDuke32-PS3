@@ -45,6 +45,9 @@ int  PS3_Pad_Init(void);
 void PS3_Pad_Shutdown(void);
 void PS3_Pad_Poll(ps3_padstate_t *out);
 
+/* the two motors of the active pad: small on/off, large 0..255 */
+void PS3_Pad_SetRumble(int small_on, int large);
+
 #ifdef __cplusplus
 }
 #endif

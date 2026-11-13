@@ -168,6 +168,9 @@ unsigned long long PS3_Micros(void)
     return (unsigned long long)sysGetSystemTime();
 }
 
+// SELECT+R3 switches it off and on (to compare)
+static int ps3_pacedclock = 1;
+
 // newlib on the PS3 has neither (ps3/compat/ps3_compat.h). The Build timer
 // reads CLOCK_MONOTONIC through enet_gettime; the realtime clock is only
 // there for completeness.
@@ -189,7 +192,15 @@ extern "C" int clock_gettime(clockid_t clock_id, struct timespec *tp)
         return 0;
     }
 
-    uint64_t const us = (uint64_t)sysGetSystemTime();
+    // the vblank's time (ps3_video.c, PS3_Video_PacedMicros): even steps
+    // between frames; never backwards when it takes over from the plain one
+    static uint64_t last_us;
+    uint64_t us = ps3_pacedclock ? (uint64_t)PS3_Video_PacedMicros() : (uint64_t)sysGetSystemTime();
+
+    if (us < last_us)
+        us = last_us;
+
+    last_us = us;
 
     tp->tv_sec  = (time_t)(us / 1000000u);
     tp->tv_nsec = (long)(us % 1000000u) * 1000;
@@ -784,6 +795,30 @@ static void PollPad(void)
         return;
     }
 
+    // Rumble: the game adds up strength and time (duke3d/src/input.h);
+    // like sdlayer: start what's asked, stop when the time is up. Low
+    // frequency = the large motor (strength), high = the small one (on/off).
+    {
+        static uint32_t rumbleZeroTime;
+
+        if (joystick.rumbleLow || joystick.rumbleHigh)
+        {
+            rumbleZeroTime = timerGetTicks() + joystick.rumbleTime;
+            // (the large motor barely turns below ~48: weak hits start there)
+            PS3_Pad_SetRumble(joystick.rumbleHigh >= 0x4000,
+                              joystick.rumbleLow ? min(255, 48 + (joystick.rumbleLow >> 8)) : 0);
+            joystick.rumbleTime = joystick.rumbleLow = joystick.rumbleHigh = 0;
+        }
+        else if (rumbleZeroTime && timerGetTicks() >= rumbleZeroTime)
+        {
+            rumbleZeroTime = 0;
+            PS3_Pad_SetRumble(0, 0);
+        }
+
+        if (!appactive)
+            PS3_Pad_SetRumble(0, 0);
+    }
+
     if (!appactive)
         return;
 
@@ -805,6 +840,17 @@ static void PollPad(void)
             PS3GL_SetPolymostView(PS3GL_PolymostView() + 1);
     }
 #endif
+
+    // SELECT+R3: the game clock on the vblanks, or plain (to compare)
+    {
+        int32_t const combo = (1 << PADBTN_BACK) | (1 << PADBTN_RIGHTSTICK);
+
+        if ((bits & combo) == combo && (pressed & combo))
+        {
+            ps3_pacedclock ^= 1;
+            PS3_Log("[video] game clock: %s", ps3_pacedclock ? "on the vblanks" : "plain");
+        }
+    }
 
     joystick.bits = (joystick.bits | pressed) & ~released;
     pad_lastbits = bits;
@@ -846,7 +892,7 @@ void joyScanDevices()
     joystick.numButtons   = PADBTN_COUNT;
     joystick.validButtons = (1u << PADBTN_COUNT) - 1 - (1u << PADBTN_GUIDE);
     joystick.isGameController = 1;
-    joystick.hasRumble = 0;
+    joystick.hasRumble = 1;   // DualShock 3 (PS3_Pad_SetRumble); Sixaxis: nothing happens
 
     Xfree(joystick.pAxis);
     joystick.pAxis = (int32_t *)Xcalloc(joystick.numAxes, sizeof(int32_t));

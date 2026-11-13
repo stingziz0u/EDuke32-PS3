@@ -76,6 +76,10 @@ void PS3_Video_SetColor(float brightness, float exponent);
    0: flip on the next vblank (up to 60). */
 void PS3_Video_SetLock30(int lock);
 
+/* Now, on the vblank grid: the time of the vblank the frame starts on
+   (the game clock, ps3layer.cpp's clock_gettime). */
+unsigned long long PS3_Video_PacedMicros(void);
+
 /* 1: fps and render timings in the log every 10 seconds (cvar
    vid_ps3_perflog). */
 void PS3_Video_SetPerfLog(int on);

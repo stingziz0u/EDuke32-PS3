@@ -105,11 +105,64 @@ FlipHandler(const u32 head)
 	flip_completed++;
 }
 
+/* The vblank grid: the time of the last vblank and the period between
+   them, measured (59.94 Hz, or 50 on a 50 Hz output). See
+   PS3_Video_PacedMicros. */
+static volatile u64 vb_last_us;
+static u64 vb_ref_us;
+static u32 vb_ref_count;
+static volatile u32 vb_period_x256;      /* microseconds * 256 */
+
 static void
 VBlankHandler(const u32 head)
 {
+	u64 now = sysGetSystemTime();
+
 	(void)head;
 	vblank_count++;
+
+	if (!vb_ref_us)
+	{
+		vb_ref_us = now;
+		vb_ref_count = vblank_count;
+	}
+	else if (vblank_count - vb_ref_count >= 30)
+	{
+		vb_period_x256 = (u32)(((now - vb_ref_us) << 8) / (vblank_count - vb_ref_count));
+	}
+
+	vb_last_us = now;
+}
+
+/*
+ * The game's clock (clock_gettime CLOCK_MONOTONIC, ps3layer.cpp): the
+ * time of the vblank the frame starts on, not the moment the loop got to
+ * it. Every picture is flipped on a vblank, so this is the time it stands
+ * for; the moment the CPU reads the clock wanders a millisecond or two
+ * either way (when the flip wait returns, what the frame before did), and
+ * EDuke32 moves the camera and interpolates by that elapsed time: the
+ * steps on screen came out uneven at a steady 60.
+ *
+ * From the last vblank the handler saw, whole periods up to now (the flip
+ * wait can return before the vblank handler has run for that vblank). A
+ * plain clock until the handler has measured the period.
+ */
+unsigned long long
+PS3_Video_PacedMicros(void)
+{
+	u64 now = sysGetSystemTime();
+	u64 last = vb_last_us;
+	u32 period = vb_period_x256;
+	u64 k;
+
+	if (!ready || !last || period < (1000u << 8) || now < last)
+	{
+		return now;
+	}
+
+	k = (((now - last) << 8) + (500u << 8)) / period;   /* half a ms early is the next one */
+
+	return last + ((k * period) >> 8);
 }
 
 /* Blocks only while both framebuffers that are not being built are still
