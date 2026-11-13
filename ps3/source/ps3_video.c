@@ -54,6 +54,33 @@ void PS3GL_LogStats(int frames);   /* gl/ps3gl_main.c */
 #include "ps3_video.h"
 #include "gl/ps3gl.h"
 #include "gl/ps3gl_shader_data.h"
+#include <ppu-lv2.h>
+
+/* sys_memory_get_user_memory_size (lv2 352): the process's memory, all of
+   it (the heap, the RSX's IO mapping, thread stacks...) */
+typedef struct { u32 total; u32 available; } ps3_user_mem_t;
+
+static s32
+PS3_UserMemory(ps3_user_mem_t *info)
+{
+	lv2syscall1(352, (u64)(uintptr_t)info);
+	return_to_user_prog(s32);
+}
+
+/* in the log with the frame rate: the heap and what the system has left */
+static void
+LogMemory(void)
+{
+	struct mallinfo const mi = mallinfo();
+	ps3_user_mem_t um = { 0, 0 };
+
+	PS3_UserMemory(&um);
+	PS3_Log("[mem] heap %u KB, in use %u KB, free in heap %u KB; system: %u KB free of %u KB",
+			(unsigned)(mi.arena / 1024), (unsigned)(mi.uordblks / 1024),
+			(unsigned)(mi.fordblks / 1024), (unsigned)(um.available / 1024),
+			(unsigned)(um.total / 1024));
+}
+
 
 #define FB_COUNT      3
 #define FB_ALIGN      64
@@ -1130,6 +1157,7 @@ flip:
 #if defined GLQUAKE || defined USE_OPENGL
 				PS3GL_LogStats(window_frames);
 #endif
+				LogMemory();
 			}
 			else
 			{

@@ -21,7 +21,7 @@
  * local store, the buffer and the voices go back, and a user event on
  * SF2SPU_PORT wakes the PPU's audio thread.
  *
- * The font's samples (floats, in main memory) go through a direct-mapped
+ * The font's samples (16 bit, in main memory) go through a direct-mapped
  * cache of 128 byte lines; before rendering, the lines each voice is
  * going to read in this chunk are asked for all at once, so a job waits
  * for main memory about once, not once per line.
@@ -44,11 +44,9 @@
 #define TSF_FASTRELEASETIME 0.01f
 #define TSF_RENDER_EFFECTSAMPLEBLOCK effect_block
 #define TSF_PI 3.14159265358979323846264338327950288
-#define TSF_POW  pow
 #define TSF_POWF powf
 #define TSF_EXPF expf
-#define TSF_LOG  log
-#define TSF_TAN  tan
+#define TSF_LOG  logf
 
 enum { TSF_SEGMENT_NONE, TSF_SEGMENT_DELAY, TSF_SEGMENT_ATTACK, TSF_SEGMENT_HOLD, TSF_SEGMENT_DECAY, TSF_SEGMENT_SUSTAIN, TSF_SEGMENT_RELEASE, TSF_SEGMENT_DONE };
 enum { TSF_INTERP_NEAREST, TSF_INTERP_LINEAR, TSF_INTERP_CUBIC };
@@ -65,11 +63,11 @@ enum { TSF_INTERP_NEAREST, TSF_INTERP_LINEAR, TSF_INTERP_CUBIC };
    The sample cache
    ------------------------------------------------------------------------ */
 
-#define LINE_FLOATS 32                  /* 128 bytes */
+#define LINE_SAMPLES 64                 /* 128 bytes of 16 bit samples */
 #define CACHE_LINES 1024                /* 128 KB */
 #define PREFETCH_MAX_LINES 48           /* per voice and range */
 
-static float    cache[CACHE_LINES][LINE_FLOATS] __attribute__((aligned(128)));
+static int16_t  cache[CACHE_LINES][LINE_SAMPLES] __attribute__((aligned(128)));
 static uint32_t cache_tag[CACHE_LINES];     /* EA >> 7 of the line, or ~0 */
 static uint32_t cache_round[CACHE_LINES];   /* asked for in this job's prefetch */
 static uint32_t round_no;
@@ -94,16 +92,17 @@ static void __attribute__((noinline)) cache_fetch(uint32_t slot, uint32_t line)
     waits++;
 }
 
-static inline float S(uint32_t idx)
+/* sample idx of the font, as tsf_sample (16 bit) */
+static inline int S(uint32_t idx)
 {
-    uint64_t const ea = font_ea + ((uint64_t)idx << 2);
+    uint64_t const ea = font_ea + ((uint64_t)idx << 1);
     uint32_t const line = (uint32_t)(ea >> 7);
     uint32_t const slot = line & (CACHE_LINES - 1);
 
     if (__builtin_expect(cache_tag[slot] != line, 0))
         cache_fetch(slot, line);
 
-    return cache[slot][((uint32_t)ea & 127) >> 2];
+    return cache[slot][((uint32_t)ea & 127) >> 1];
 }
 
 /* asks for the lines of samples first..last (no waiting) */
@@ -112,8 +111,8 @@ static void prefetch(uint32_t first, uint32_t last)
     if (last < first)
         return;
 
-    uint32_t line = (uint32_t)((font_ea + ((uint64_t)first << 2)) >> 7);
-    uint32_t const end = (uint32_t)((font_ea + ((uint64_t)last << 2)) >> 7);
+    uint32_t line = (uint32_t)((font_ea + ((uint64_t)first << 1)) >> 7);
+    uint32_t const end = (uint32_t)((font_ea + ((uint64_t)last << 1)) >> 7);
     int budget = PREFETCH_MAX_LINES;
 
     for (; line <= end && budget > 0; line++, budget--)
@@ -136,7 +135,7 @@ static void prefetch(uint32_t first, uint32_t last)
    tsf's voice rendering
    ------------------------------------------------------------------------ */
 
-static double tsf_timecents2Secsd(double timecents) { return TSF_POW(2.0, timecents / 1200.0); }
+static float tsf_timecents2Secsf(float timecents) { return TSF_POWF(2.0f, timecents / 1200.0f); }
 static float tsf_cents2Hertz(float cents) { return 8.176f * TSF_POWF(2.0f, cents / 1200.0f); }
 static float tsf_decibelsToGain(float db) { return (db > -100.f ? TSF_POWF(10.0f, db * 0.05f) : 0); }
 
@@ -262,22 +261,6 @@ static void tsf_voice_envelope_process(struct tsf_voice_envelope* e, int numSamp
 		tsf_voice_envelope_nextsegment(e, e->segment, outSampleRate);
 }
 
-static void tsf_voice_lowpass_setup(struct tsf_voice_lowpass* e, float Fc)
-{
-	// Lowpass filter from http://www.earlevel.com/main/2012/11/26/biquad-c-source-code/
-	double K = TSF_TAN(TSF_PI * Fc), KK = K * K;
-	double norm = 1 / (1 + K * e->QInv + KK);
-	e->a0 = KK * norm;
-	e->a1 = 2 * e->a0;
-	e->b1 = 2 * (KK - 1) * norm;
-	e->b2 = (1 - K * e->QInv + KK) * norm;
-}
-
-static inline float tsf_voice_lowpass_process(struct tsf_voice_lowpass* e, double In)
-{
-	double Out = In * e->a0 + e->z1; e->z1 = In * e->a1 + e->z2 - e->b1 * Out; e->z2 = In * e->a0 - e->b2 * Out; return (float)Out;
-}
-
 static void tsf_voice_lfo_process(struct tsf_voice_lfo* e, int blockSamples)
 {
 	if (e->samplesUntil > blockSamples) { e->samplesUntil -= blockSamples; return; }
@@ -286,158 +269,178 @@ static void tsf_voice_lfo_process(struct tsf_voice_lfo* e, int blockSamples)
 	else if (e->level < -1.0f) { e->delta = -e->delta; e->level = -2.0f - e->level; }
 }
 
-static inline float tsf_voice_interpolate(unsigned int *pos, float alpha, int interpolatemode)
-{
-	switch (interpolatemode)
-	{
-		case TSF_INTERP_LINEAR:
-		{
-			float const a = S(pos[1]), b = S(pos[2]);
-			return a + (b - a) * alpha;
-		}
-		case TSF_INTERP_CUBIC:
-		{
-			const float pointa = S(pos[0]), pointb = S(pos[1]), pointc = S(pos[2]), pointd = S(pos[3]);
-			float a0, a1, a2, a3, alpha2;
+#define SAMPLE_SCALE (1.0f / 32767.0f)
 
-			alpha2 = alpha * alpha;
-			a0 = -0.5f * pointa + 1.5f * pointb - 1.5f * pointc + 0.5f * pointd;
-			a1 = pointa - 2.5f * pointb + 2.f * pointc - 0.5f * pointd;
-			a2 = -0.5f * pointa + 0.5f * pointc;
-			a3 = pointb;
-			return (a0 * alpha * alpha2 + a1 * alpha2 + a2 * alpha + a3);
-		}
-		case TSF_INTERP_NEAREST:
-		default:
-			return S(pos[1]);
-	}
-}
-
-/* tsf_voice_render for TSF_STEREO_INTERLEAVED (stereo) and TSF_MONO */
+/*
+ * tsf_voice_render for TSF_STEREO_INTERLEAVED (stereo) and TSF_MONO, made
+ * for the SPU: the SPU has no double compare or double -> int conversion
+ * (software, slow) and libm's double functions are slower still, so
+ *  - the sample position is 32.32 fixed point (tsf: a double; the same
+ *    positions to well under a millionth of a sample, the same loop and
+ *    end tests);
+ *  - the pitch, gain and filter math per effect block is float;
+ *  - the low-pass filter runs in float (tsf: double).
+ * Same envelopes, LFOs and order of operations as tsf.
+ */
 static void render_voice(sf2spu_voice* v, float* outputBuffer, int numSamples, int stereo, int interpolatemode, float outSampleRate)
 {
-	float* outL = outputBuffer;
+	float* out = outputBuffer;
 
-	TSF_BOOL updateModEnv = (v->modEnvToPitch || v->modEnvToFilterFc);
-	TSF_BOOL updateModLFO = (v->modlfo.delta && (v->modLfoToPitch || v->modLfoToFilterFc || v->modLfoToVolume));
-	TSF_BOOL updateVibLFO = (v->viblfo.delta && (v->vibLfoToPitch));
-	TSF_BOOL isLooping    = (v->loopStart < v->loopEnd);
-	unsigned int tmpLoopStart = v->loopStart, tmpLoopEnd = v->loopEnd, regionEnd = v->regionEnd, pos[4] = {0};
-	double tmpSampleEndDbl = (double)regionEnd, tmpLoopEndDbl = (double)tmpLoopEnd + 1.0;
-	double tmpSourceSamplePosition = v->sourceSamplePosition;
-	float alpha           = 0;
-	struct tsf_voice_lowpass tmpLowpass = v->lowpass;
+	int const updateModEnv = (v->modEnvToPitch || v->modEnvToFilterFc);
+	int const updateModLFO = (v->modlfo.delta && (v->modLfoToPitch || v->modLfoToFilterFc || v->modLfoToVolume));
+	int const updateVibLFO = (v->viblfo.delta && (v->vibLfoToPitch));
+	int const isLooping    = (v->loopStart < v->loopEnd);
+	uint32_t const loopStart = v->loopStart, loopEnd = v->loopEnd, regionEnd = v->regionEnd;
+	uint32_t const loopLen = loopEnd - loopStart + 1;
 
-	TSF_BOOL dynamicLowpass = (v->modLfoToFilterFc || v->modEnvToFilterFc);
-	float tmpSampleRate = outSampleRate, tmpInitialFilterFc, tmpModLfoToFilterFc, tmpModEnvToFilterFc;
+	double const startPos = v->sourceSamplePosition;
+	uint32_t ipos = (uint32_t)startPos;
+	uint32_t frac = (uint32_t)((startPos - (double)ipos) * 4294967296.0);
 
-	TSF_BOOL dynamicPitchRatio = (v->modLfoToPitch || v->modEnvToPitch || v->vibLfoToPitch);
-	double pitchRatio;
-	float tmpModLfoToPitch, tmpVibLfoToPitch, tmpModEnvToPitch;
+	int const dynamicLowpass = (v->modLfoToFilterFc || v->modEnvToFilterFc);
+	int lpActive = v->lowpass.active;
+	float lpQInv = (float)v->lowpass.QInv;
+	float a0 = (float)v->lowpass.a0, a1 = (float)v->lowpass.a1, b1 = (float)v->lowpass.b1, b2 = (float)v->lowpass.b2;
+	float z1 = (float)v->lowpass.z1, z2 = (float)v->lowpass.z2;
 
-	TSF_BOOL dynamicGain = (v->modLfoToVolume != 0);
-	float noteGain = 0, tmpModLfoToVolume;
+	int const dynamicPitchRatio = (v->modLfoToPitch || v->modEnvToPitch || v->vibLfoToPitch);
+	float const pitchInput = (float)v->pitchInputTimecents, pitchOutput = (float)v->pitchOutputFactor;
+	float pitchRatio = 0;
 
-	if (dynamicLowpass) tmpInitialFilterFc = (float)v->initialFilterFc, tmpModLfoToFilterFc = (float)v->modLfoToFilterFc, tmpModEnvToFilterFc = (float)v->modEnvToFilterFc;
-	else tmpInitialFilterFc = 0, tmpModLfoToFilterFc = 0, tmpModEnvToFilterFc = 0;
+	int const dynamicGain = (v->modLfoToVolume != 0);
+	float noteGain = 0;
 
-	if (dynamicPitchRatio) pitchRatio = 0, tmpModLfoToPitch = (float)v->modLfoToPitch, tmpVibLfoToPitch = (float)v->vibLfoToPitch, tmpModEnvToPitch = (float)v->modEnvToPitch;
-	else pitchRatio = tsf_timecents2Secsd(v->pitchInputTimecents) * v->pitchOutputFactor, tmpModLfoToPitch = 0, tmpVibLfoToPitch = 0, tmpModEnvToPitch = 0;
-
-	if (dynamicGain) tmpModLfoToVolume = (float)v->modLfoToVolume * 0.1f;
-	else noteGain = tsf_decibelsToGain(v->noteGainDB), tmpModLfoToVolume = 0;
+	if (!dynamicPitchRatio) pitchRatio = tsf_timecents2Secsf(pitchInput) * pitchOutput;
+	if (!dynamicGain) noteGain = tsf_decibelsToGain(v->noteGainDB);
 
 	while (numSamples)
 	{
-		float gainMono, gainLeft, gainRight;
 		int blockSamples = (numSamples > TSF_RENDER_EFFECTSAMPLEBLOCK ? TSF_RENDER_EFFECTSAMPLEBLOCK : numSamples);
 		numSamples -= blockSamples;
 
 		if (dynamicLowpass)
 		{
-			float fres = tmpInitialFilterFc + v->modlfo.level * tmpModLfoToFilterFc + v->modenv.level * tmpModEnvToFilterFc;
-			float lowpassFc = (fres <= 13500 ? tsf_cents2Hertz(fres) / tmpSampleRate : 1.0f);
-			tmpLowpass.active = (lowpassFc < 0.499f);
-			if (tmpLowpass.active) tsf_voice_lowpass_setup(&tmpLowpass, lowpassFc);
+			float fres = (float)v->initialFilterFc + v->modlfo.level * (float)v->modLfoToFilterFc + v->modenv.level * (float)v->modEnvToFilterFc;
+			float lowpassFc = (fres <= 13500 ? tsf_cents2Hertz(fres) / outSampleRate : 1.0f);
+			lpActive = (lowpassFc < 0.499f);
+			if (lpActive)
+			{
+				float K = tanf((float)TSF_PI * lowpassFc), KK = K * K;
+				float norm = 1.0f / (1.0f + K * lpQInv + KK);
+				a0 = KK * norm;
+				a1 = 2.0f * a0;
+				b1 = 2.0f * (KK - 1.0f) * norm;
+				b2 = (1.0f - K * lpQInv + KK) * norm;
+			}
 		}
 
 		if (dynamicPitchRatio)
-			pitchRatio = tsf_timecents2Secsd(v->pitchInputTimecents + (v->modlfo.level * tmpModLfoToPitch + v->viblfo.level * tmpVibLfoToPitch + v->modenv.level * tmpModEnvToPitch)) * v->pitchOutputFactor;
+			pitchRatio = tsf_timecents2Secsf(pitchInput + (v->modlfo.level * (float)v->modLfoToPitch + v->viblfo.level * (float)v->vibLfoToPitch + v->modenv.level * (float)v->modEnvToPitch)) * pitchOutput;
 
 		if (dynamicGain)
-			noteGain = tsf_decibelsToGain(v->noteGainDB + (v->modlfo.level * tmpModLfoToVolume));
+			noteGain = tsf_decibelsToGain(v->noteGainDB + (v->modlfo.level * ((float)v->modLfoToVolume * 0.1f)));
 
-		gainMono = noteGain * v->ampenv.level;
+		float const gainMono = noteGain * v->ampenv.level;
+		float const gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
 
 		// Update EG.
-		tsf_voice_envelope_process(&v->ampenv, blockSamples, tmpSampleRate);
-		if (updateModEnv) tsf_voice_envelope_process(&v->modenv, blockSamples, tmpSampleRate);
+		tsf_voice_envelope_process(&v->ampenv, blockSamples, outSampleRate);
+		if (updateModEnv) tsf_voice_envelope_process(&v->modenv, blockSamples, outSampleRate);
 
 		// Update LFOs.
 		if (updateModLFO) tsf_voice_lfo_process(&v->modlfo, blockSamples);
 		if (updateVibLFO) tsf_voice_lfo_process(&v->viblfo, blockSamples);
 
-		gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
+		/* the step in 32.32 */
+		uint32_t const istep = (uint32_t)pitchRatio;
+		uint32_t const fstep = (uint32_t)((pitchRatio - (float)istep) * 4294967296.0f);
 
-		while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
+		while (blockSamples-- && ipos < regionEnd)
 		{
-			// Get samples.
-			pos[1] = (unsigned int)tmpSourceSamplePosition;
-			if (interpolatemode != TSF_INTERP_NEAREST)
+			float val;
+
+			if (interpolatemode == TSF_INTERP_NEAREST)
+				val = (float)S(ipos) * SAMPLE_SCALE;
+			else
 			{
-				alpha = (float)(tmpSourceSamplePosition - pos[1]);
-				pos[2] = isLooping ? (pos[1] >= tmpLoopEnd ? tmpLoopStart : pos[1] + 1) : (pos[1] + 1 == regionEnd ? pos[1] : pos[1] + 1);
+				uint32_t const p2 = isLooping ? (ipos >= loopEnd ? loopStart : ipos + 1) : (ipos + 1 == regionEnd ? ipos : ipos + 1);
+				float const alpha = (float)(frac >> 8) * (1.0f / 16777216.0f);
+
 				if (interpolatemode == TSF_INTERP_CUBIC)
-					pos[0] = (pos[1] == tmpLoopStart && isLooping ? tmpLoopEnd : pos[1] == 0 ? 0 : pos[1] - 1), pos[3] = isLooping ? (pos[2] >= tmpLoopEnd ? tmpLoopStart : pos[2] + 1) : (pos[2] + 1 == regionEnd ? pos[2] : pos[2] + 1);
+				{
+					uint32_t const p0 = (ipos == loopStart && isLooping ? loopEnd : ipos == 0 ? 0 : ipos - 1);
+					uint32_t const p3 = isLooping ? (p2 >= loopEnd ? loopStart : p2 + 1) : (p2 + 1 == regionEnd ? p2 : p2 + 1);
+					float const pa = (float)S(p0), pb = (float)S(ipos), pc = (float)S(p2), pd = (float)S(p3);
+					float const alpha2 = alpha * alpha;
+					float const c0 = -0.5f * pa + 1.5f * pb - 1.5f * pc + 0.5f * pd;
+					float const c1 = pa - 2.5f * pb + 2.f * pc - 0.5f * pd;
+					float const c2 = -0.5f * pa + 0.5f * pc;
+					val = (c0 * alpha * alpha2 + c1 * alpha2 + c2 * alpha + pb) * SAMPLE_SCALE;
+				}
+				else
+				{
+					float const sa = (float)S(ipos), sb = (float)S(p2);
+					val = (sa + (sb - sa) * alpha) * SAMPLE_SCALE;
+				}
 			}
 
-			// Interpolation.
-			float val = tsf_voice_interpolate(pos, alpha, interpolatemode);
-
 			// Low-pass filter.
-			if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
+			if (lpActive)
+			{
+				float const in = val;
+				val = in * a0 + z1;
+				z1 = in * a1 + z2 - b1 * val;
+				z2 = in * a0 - b2 * val;
+			}
 
 			if (stereo)
 			{
-				*outL++ += val * gainLeft;
-				*outL++ += val * gainRight;
+				out[0] += val * gainLeft;
+				out[1] += val * gainRight;
+				out += 2;
 			}
 			else
-				*outL++ += val * gainMono;
+				*out++ += val * gainMono;
 
 			// Next sample.
-			tmpSourceSamplePosition += pitchRatio;
-			if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
+			uint32_t const f2 = frac + fstep;
+			ipos += istep + (f2 < frac);
+			frac = f2;
+			if (isLooping && ipos > loopEnd) ipos -= loopLen;
 		}
 
-		if (tmpSourceSamplePosition >= tmpSampleEndDbl || v->ampenv.segment == TSF_SEGMENT_DONE)
+		if (ipos >= regionEnd || v->ampenv.segment == TSF_SEGMENT_DONE)
 		{
 			v->ended = 1;           /* tsf_voice_kill */
 			return;
 		}
 	}
 
-	v->sourceSamplePosition = tmpSourceSamplePosition;
-	if (tmpLowpass.active || dynamicLowpass) v->lowpass = tmpLowpass;
+	v->sourceSamplePosition = (double)ipos + (double)frac * (1.0 / 4294967296.0);
+	if (lpActive || dynamicLowpass)
+	{
+		v->lowpass.active = (char)lpActive;
+		v->lowpass.a0 = a0, v->lowpass.a1 = a1, v->lowpass.b1 = b1, v->lowpass.b2 = b2;
+		v->lowpass.z1 = z1, v->lowpass.z2 = z2;
+	}
 }
 
 /* the lines a voice reads in the next numSamples, about */
 static void prefetch_voice(sf2spu_voice const* v, int numSamples)
 {
-	double ratio = tsf_timecents2Secsd(v->pitchInputTimecents) * v->pitchOutputFactor;
-	double pos = v->sourceSamplePosition;
+	float ratio = tsf_timecents2Secsf((float)v->pitchInputTimecents) * (float)v->pitchOutputFactor;
+	uint32_t const p0 = (uint32_t)v->sourceSamplePosition;
 
 	if (v->modLfoToPitch || v->modEnvToPitch || v->vibLfoToPitch)
-		ratio *= 1.25;          /* some room for the modulation */
+		ratio *= 1.25f;         /* some room for the modulation */
 
-	double span = ratio * numSamples + 3.0;
-	if (span > (double)(PREFETCH_MAX_LINES * LINE_FLOATS))
-		span = (double)(PREFETCH_MAX_LINES * LINE_FLOATS);
+	float span = ratio * (float)numSamples + 3.0f;
+	if (!(span < (float)(PREFETCH_MAX_LINES * LINE_SAMPLES)))
+		span = (float)(PREFETCH_MAX_LINES * LINE_SAMPLES);
 
-	if (pos < 0.0 || pos >= (double)v->regionEnd)
+	if (p0 >= v->regionEnd)
 		return;
 
-	uint32_t const p0 = (uint32_t)pos;
 	uint32_t const p1 = p0 + (uint32_t)span;
 
 	if (v->loopStart < v->loopEnd && p1 > v->loopEnd && p0 <= v->loopEnd)

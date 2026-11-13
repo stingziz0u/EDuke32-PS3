@@ -748,10 +748,19 @@ static void G_ReadGLFrame(void)
 
     // Save OpenGL screenshot with Duke3D palette
     // NOTE: maybe need to move this to the engine...
-    auto frame = (palette_t *)Xaligned_alloc(16, xdim * ydim * sizeof(palette_t));
     char *const pic = (char *) waloff[TILE_SAVESHOT];
 
     Bassert(waloff[TILE_SAVESHOT]);
+
+#ifdef __PPU__
+    // PS3: no readback of the RSX's frame (patch 22 froze saving, and
+    // glReadPixels only gives black): a black thumbnail, without the
+    // xdim*ydim*4 buffer (3.6 MB at 720p) it would have needed.
+    Bmemset(pic, paletteGetClosestColor(0, 0, 0), 320 * 200);
+    return;
+#endif
+
+    auto frame = (palette_t *)Xaligned_alloc(16, xdim * ydim * sizeof(palette_t));
 
     int const xf = divscale16(ydim*4/3, 320);
     int const yf = divscale16(ydim, 200);  // (ydim<<16)/200

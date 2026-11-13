@@ -36,6 +36,9 @@ int SF2_EffectSampleBlockSize = 16;
 #define TSF_FREE    Xfree
 #define TSF_MEMCPY Bmemcpy
 #define TSF_MEMSET Bmemset
+#ifdef __PPU__
+#define TSF_SAMPLES_INT16   // PS3: the font's samples stay 16 bit (half the memory)
+#endif
 
 #include "tsf.h"
 
@@ -50,6 +53,8 @@ char        SF2_BankFile[BMAX_PATH];
  * The time the synth takes goes to the log every 10 s.
  */
 extern "C" unsigned long long PS3_Micros(void);
+extern "C" void PS3_Log(const char *fmt, ...);
+#include <malloc.h>
 
 #ifdef PS3_SF2_SPU
 #include "sf2spu_wire.h"
@@ -70,7 +75,9 @@ static_assert(offsetof(sf2w_voice_envelope, parameters) == offsetof(struct tsf_v
 static_assert(offsetof(sf2w_voice_envelope, segmentIsExponential) == offsetof(struct tsf_voice_envelope, segmentIsExponential), "envelope flags");
 static_assert(offsetof(sf2w_voice_lowpass, active) == offsetof(struct tsf_voice_lowpass, active), "lowpass active");
 
-static float const *sf2spu_font;
+static_assert(sizeof(tsf_sample) == 2, "the SPU reads the font as 16 bit samples");
+
+static tsf_sample const *sf2spu_font;
 
 static void SF2_RenderSPU(tsf *f, float *buffer, int samples)
 {
@@ -273,11 +280,17 @@ static int SF2_LoadBank(char const *const filename)
     if (sf2_kfd != buildvfs_kfd_invalid)
     {
         tsf_close(sf2_synth);
+#ifdef __PPU__
+        size_t const heap0 = mallinfo().uordblks;
+#endif
         sf2_synth = tsf_load(&sf2_stream);
         kclose(sf2_kfd);
 
         if (sf2_synth)
         {
+#ifdef __PPU__
+            PS3_Log("[sf2] \"%s\" takes %u KB of memory", filename, (unsigned)((mallinfo().uordblks - heap0) / 1024));
+#endif
             VLOG_F(LOG_ASS, "Loaded \"%s\"", filename);
             return SF2_Ok;
         }

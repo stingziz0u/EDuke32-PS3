@@ -320,6 +320,17 @@ TSFDEF float tsf_channel_get_tuning(tsf* f, int channel);
 #define TSF_TRUE 1
 #define TSF_FALSE 0
 #define TSF_BOOL char
+
+// TSF_SAMPLES_INT16: keep the font's samples as 16 bit (as the file has
+// them) instead of float, half the memory (PS3: a 30 MB font is 60 MB as
+// floats); converted to float as they are read.
+#ifdef TSF_SAMPLES_INT16
+typedef short tsf_sample;
+#define TSF_SAMPLE_TO_FLOAT(x) ((float)(x) * (1.0f / 32767.0f))
+#else
+typedef float tsf_sample;
+#define TSF_SAMPLE_TO_FLOAT(x) (x)
+#endif
 #define TSF_PI 3.14159265358979323846264338327950288
 #define TSF_NULL 0
 
@@ -340,7 +351,7 @@ typedef char tsf_char20[20];
 struct tsf
 {
 	struct tsf_preset* presets;
-	float* fontSamples;
+	tsf_sample* fontSamples;
 	struct tsf_voice* voices;
 	struct tsf_channels* channels;
 
@@ -896,7 +907,23 @@ static int tsf_load_presets(tsf* res, struct tsf_hydra *hydra, unsigned int font
 	return 1;
 }
 
-static int tsf_load_samples(float** pFloatBuffer, unsigned int* pSmplCount, struct tsf_riffchunk *chunkSmpl, struct tsf_stream* stream)
+#ifdef TSF_SAMPLES_INT16
+static int tsf_load_samples(tsf_sample** pFloatBuffer, unsigned int* pSmplCount, struct tsf_riffchunk *chunkSmpl, struct tsf_stream* stream)
+{
+	*pSmplCount = chunkSmpl->size / (unsigned int)sizeof(short);
+	*pFloatBuffer = (tsf_sample*)TSF_MALLOC(*pSmplCount * sizeof(short));
+	if (!*pFloatBuffer || !stream->read(stream->data, *pFloatBuffer, *pSmplCount * sizeof(short))) return 0;
+	if (chunkSmpl->size & 1) stream->skip(stream->data, 1);
+	#ifdef TSF_BIG_ENDIAN
+	{
+		unsigned short *p = (unsigned short*)*pFloatBuffer, *end = p + *pSmplCount;
+		for (; p != end; p++) *p = (unsigned short)((*p >> 8) | (*p << 8));
+	}
+	#endif
+	return 1;
+}
+#else
+static int tsf_load_samples(tsf_sample** pFloatBuffer, unsigned int* pSmplCount, struct tsf_riffchunk *chunkSmpl, struct tsf_stream* stream)
 {
 	// Inline convert the samples from short to float
 	float *res, *out; const short *in;
@@ -914,6 +941,7 @@ static int tsf_load_samples(float** pFloatBuffer, unsigned int* pSmplCount, stru
 	}
 	return 1;
 }
+#endif
 
 static int tsf_voice_envelope_release_samples(struct tsf_voice_envelope* e, float outSampleRate)
 {
@@ -1130,16 +1158,16 @@ static void tsf_voice_calcpitchratio(struct tsf_voice* v, float pitchShift, floa
 	v->pitchOutputFactor = v->region->sample_rate / (tsf_timecents2Secsd(v->region->pitch_keycenter * 100.0) * outSampleRate);
 }
 
-static float tsf_voice_interpolate(float* input, unsigned int *pos, float alpha, enum TSFInterpolateMode interpolatemode)
+static float tsf_voice_interpolate(tsf_sample* input, unsigned int *pos, float alpha, enum TSFInterpolateMode interpolatemode)
 {
 	// Interpolation methods based off https://paulbourke.net/miscellaneous/interpolation/
 	switch (interpolatemode)
 	{
 		case TSF_INTERP_LINEAR:
-			return (input[pos[1]] * (1.f - alpha) + input[pos[2]] * alpha);
+			return (TSF_SAMPLE_TO_FLOAT(input[pos[1]]) * (1.f - alpha) + TSF_SAMPLE_TO_FLOAT(input[pos[2]]) * alpha);
 		case TSF_INTERP_CUBIC:
 		{
-			const float pointa = input[pos[0]], pointb = input[pos[1]], pointc = input[pos[2]], pointd = input[pos[3]];
+			const float pointa = TSF_SAMPLE_TO_FLOAT(input[pos[0]]), pointb = TSF_SAMPLE_TO_FLOAT(input[pos[1]]), pointc = TSF_SAMPLE_TO_FLOAT(input[pos[2]]), pointd = TSF_SAMPLE_TO_FLOAT(input[pos[3]]);
 			float a0, a1, a2, a3, alpha2;
 
 			alpha2 = alpha * alpha;
@@ -1151,14 +1179,14 @@ static float tsf_voice_interpolate(float* input, unsigned int *pos, float alpha,
 		}
 		case TSF_INTERP_NEAREST:
 		default:
-			return input[pos[1]];
+			return TSF_SAMPLE_TO_FLOAT(input[pos[1]]);
 	}
 }
 
 static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, int numSamples)
 {
 	struct tsf_region* region = v->region;
-	float* input = f->fontSamples;
+	tsf_sample* input = f->fontSamples;
 	float* outL = outputBuffer;
 	float* outR = (f->outputmode == TSF_STEREO_UNWEAVED ? outL + numSamples : TSF_NULL);
 
@@ -1327,7 +1355,7 @@ TSFDEF tsf* tsf_load(struct tsf_stream* stream)
 	struct tsf_riffchunk chunkHead;
 	struct tsf_riffchunk chunkList;
 	struct tsf_hydra hydra;
-	float* floatBuffer = TSF_NULL;
+	tsf_sample* floatBuffer = TSF_NULL;
 	tsf_u32 smplCount = 0;
 
 	if (!tsf_riffchunk_read(TSF_NULL, &chunkHead, stream) || !TSF_FourCCEquals(chunkHead.id, "sfbk"))
