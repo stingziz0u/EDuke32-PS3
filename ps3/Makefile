@@ -167,7 +167,7 @@ ENGINE_OBJS := \
 # The PS3 layer: talks to the engine (its headers) but calls the real C
 # library (not renamed).
 LAYER_CPP := ps3layer driver_ps3 ps3_gladfill
-LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video ps3_debug ps3_sf2spu
+LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video ps3_debug ps3_sf2spu ps3_launcher
 
 # ps3gl: OpenGL on the RSX, TyrQuakeCell's (ps3/source/gl), plus what
 # Polymost needs (ps3gl_prog.c: its GLSL program as Cg, buffer objects;
@@ -394,14 +394,25 @@ png=lambda t,d:struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d));\
 open('$(ICON0)','wb').write(b'\x89PNG\r\n\x1a\n'+png(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+png(b'IDAT',zlib.compress(rows))+png(b'IEND',b''))"
 
 # The folders the user fills. Created at build time: they are empty, and
-# neither git nor a patch keeps empty folders. None yet: the game data goes
-# straight into USRDIR.
-PKG_DIRS :=
+# neither git nor a patch keeps empty folders. addons: the add-ons (and
+# the game itself, if wanted) instead of USRDIR, each in a folder of its
+# own if wanted (ps3_launcher.c).
+PKG_DIRS := USRDIR/addons
 
 pkgdirs:
 	@for d in $(PKG_DIRS); do mkdir -p "$(PKGFILES)/$$d"; done
 
 $(TARGET).pkg: $(PKGFILES)/USRDIR/VERSION.TXT $(ICON0) | pkgdirs
+
+# RELOAD.SELF: this program as a plain SELF, straight into the folder the
+# %.pkg rule packs. Quit and errors start it to come back to the launcher
+# (sysProcessExitSpawn2 can't start the NPDRM EBOOT.BIN).
+$(TARGET).pkg: reloadself
+
+.PHONY: reloadself
+reloadself: $(TARGET).self
+	@mkdir -p $(BUILDDIR)/pkg/USRDIR
+	@cp $(TARGET).self $(BUILDDIR)/pkg/USRDIR/RELOAD.SELF
 
 #----------------------------------------------------------------------------
 # Diagnostics

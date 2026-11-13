@@ -102,6 +102,37 @@ PS3_LogInit(void)
 
 	LogLockInit();
 
+	/* back in the launcher from the game (ps3_launcher.c's marker): the
+	   same session, the same log, so the game's last lines (an error)
+	   stay in it */
+	{
+		FILE *marker = fopen(PS3_USRDIR "/ps3_return_to_launcher", "r");
+
+		if (marker)
+		{
+			fclose(marker);
+			logfp = fopen(PS3_LOGFILE, "a");
+
+			if (logfp)
+			{
+				fseek(logfp, 0, SEEK_END);
+				logbytes = ftell(logfp);
+
+				/* room for this session too, or a fresh log */
+				if (logbytes < LOG_MAX_BYTES / 2)
+				{
+					fputs("=== back in the launcher ===\n", logfp);
+					fflush(logfp);
+					return;
+				}
+
+				fclose(logfp);
+				logfp = NULL;
+				logbytes = 0;
+			}
+		}
+	}
+
 	remove(PS3_LOGFILE_OLD);
 	rename(PS3_LOGFILE, PS3_LOGFILE_OLD);
 

@@ -61,6 +61,7 @@
 
 #include "ps3_platform.h"
 #include "ps3_video.h"
+#include "ps3_launcher.h"
 #include "ps3_font.h"
 #include "ps3_pad.h"
 #include "driver_ps3.h"
@@ -74,6 +75,10 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 #define GAME_STACK_SIZE (8 * 1024 * 1024)
 
 static volatile int exit_requested;
+
+// the last error shown (PS3_FatalScreen), for the launcher: the game ends
+// after it, and the launcher shows it under its list
+static char last_error[512];
 static int sysutil_registered;
 static int pad_ok;
 
@@ -419,6 +424,11 @@ void PS3_Exit(int code)
         sysutil_registered = 0;
     }
 
+    // Quit from the game's menu, or an error: back to the launcher (not
+    // the XMB's "Quit Game"). Returns only if that can't be done.
+    if (!exit_requested && PS3_Launcher_Used())
+        PS3_Launcher_Relaunch(last_error[0] ? last_error : nullptr);
+
     PS3_Log("[9] bye");
     PS3_LogShutdown();
 
@@ -607,6 +617,8 @@ static void ShowText(const char *title, const char *message, const char *footer1
 void PS3_FatalScreen(const char *title, const char *message)
 {
     PS3_Log("[error] %s: %s", title ? title : "", message ? message : "");
+    snprintf(last_error, sizeof(last_error), "%s%s%s", title ? title : "", title ? ": " : "",
+             message ? message : "");
     ShowText(title, message, "Details: USRDIR/eduke32-ps3.log", "Press X to go on.");
     WaitForButtons(PS3_PAD_CROSS, 120);
 }
@@ -1542,36 +1554,6 @@ static void ProbeCPU(void)
             ((char)0xff < 0) ? "signed" : "unsigned");
 }
 
-static int HasExtension(const char *name, const char *ext)
-{
-    size_t const n = strlen(name), e = strlen(ext);
-    return n > e && !Bstrcasecmp(name + n - e, ext);
-}
-
-// Any group file in USRDIR: the engine looks at them itself (grpinfo) and
-// picks the game; this only tells "nothing at all" from "something".
-static int FindGameData(void)
-{
-    DIR *d = opendir(PS3_USRDIR);
-
-    if (!d)
-        return 0;
-
-    int found = 0;
-    struct dirent *e;
-
-    while ((e = readdir(d)) != NULL)
-        if (HasExtension(e->d_name, ".grp") || HasExtension(e->d_name, ".ssi"))
-        {
-            PS3_Log("[7] game data: %s", e->d_name);
-            found++;
-        }
-
-    closedir(d);
-
-    return found;
-}
-
 static void NoDataScreen(void)
 {
     static const char *const lines[] =
@@ -1582,8 +1564,9 @@ static void NoDataScreen(void)
         "(GOG, Steam, CD or the shareware) by FTP to:",
         "  " PS3_USRDIR "/",
         "",
-        "At least DUKE3D.GRP. Add-ons (DUKEDC.GRP, VACATION.GRP,",
-        "NWINTER.GRP...) go in the same folder.",
+        "or to its addons folder. At least DUKE3D.GRP; the add-ons",
+        "(DUKEDC.GRP, VACATION.GRP, NWINTER.GRP...) in the same",
+        "folders, or each in a folder of its own inside addons.",
         "",
         "Press X to go back to the XMB.",
     };
@@ -1596,14 +1579,11 @@ static void NoDataScreen(void)
 
 static void GameMain(void)
 {
-    // -usecwd: the settings and the saves in the "working directory",
-    // which is USRDIR (ps3_stdio.c), not in a .config folder in a home
-    static char arg0[] = "eduke32";
-    static char arg1[] = "-usecwd";
-    // autotest (USRDIR/autotest.txt): straight into E1L1, the hardest skill
-    static char arg2[] = "-v1", arg3[] = "-l1", arg4[] = "-s4";
-    static char *argv[] = { arg0, arg1, nullptr, nullptr, nullptr, nullptr };
-    int argc = 2;
+    int argc = 0;
+    char **argv = nullptr;
+    // the launcher's command line, and the autotest's own after it
+    static char *args[32];
+    static char at1[] = "-v1", at2[] = "-l1", at3[] = "-s4";
 
     PS3_Log("[1] game thread running");
 
@@ -1617,9 +1597,6 @@ static void GameMain(void)
         {
             fclose(f);
             ps3_autotest = 1;
-            argv[argc++] = arg2;
-            argv[argc++] = arg3;
-            argv[argc++] = arg4;
             PS3_Log("[autotest] on (autotest.txt): every level by itself, [autotest] lines in this log");
         }
     }
@@ -1646,10 +1623,33 @@ static void GameMain(void)
 
     PS3_Video_SetPerfLog(1);  // first builds: fps in the log
 
-    if (!FindGameData())
+    // [7] the launcher: what is installed (USRDIR, USRDIR/addons), the
+    // menu when there is more than one thing to play, the command line
     {
-        NoDataScreen();
-        PS3_Exit(0);
+        extern int ps3_autotest;
+
+        if (!PS3_Launcher_Run(&argc, &argv, ps3_autotest))
+        {
+            NoDataScreen();
+            PS3_Exit(0);
+        }
+
+        int n = 0;
+
+        for (; n < argc && n < (int)ARRAY_SIZE(args) - 4; n++)
+            args[n] = argv[n];
+
+        // autotest: straight into E1L1, the hardest skill
+        if (ps3_autotest)
+        {
+            args[n++] = at1;
+            args[n++] = at2;
+            args[n++] = at3;
+        }
+
+        args[n] = nullptr;
+        argc = n;
+        argv = args;
     }
 
     PS3_Log("[8] the engine starts");
