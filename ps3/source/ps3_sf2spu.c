@@ -19,17 +19,46 @@
  * the SPU off for good, and the synth renders on the PPU as before.
  *
  * Without the SPU toolchain (no spu-gcc) PS3_SF2_SPU isn't defined and
- * this file is empty: the synth stays on the PPU.
+ * only the synth's lock is here: the synth stays on the PPU.
  *
  * =======================================================================
  */
-
-#ifdef PS3_SF2_SPU
 
 #include <stdint.h>
 #include <string.h>
 
 #include <ppu-types.h>
+#include <sys/mutex.h>
+
+/* The synth's lock (driver_sf2.cpp: the music renders ahead, outside the
+   PCM driver's lock). Recursive; created once, never destroyed. Before
+   it exists (no SoundFont yet) locking does nothing. */
+static sys_mutex_t sf2_lock;
+static int         sf2_lock_ok;
+
+void PS3_SF2_LockInit(void)
+{
+    sys_mutex_attr_t attr;
+
+    if (sf2_lock_ok)
+        return;
+
+    memset(&attr, 0, sizeof(attr));
+    attr.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
+    attr.attr_recursive = SYS_MUTEX_ATTR_RECURSIVE;
+    attr.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
+    attr.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
+    strcpy(attr.name, "sf2lock");
+
+    sf2_lock_ok = (sysMutexCreate(&sf2_lock, &attr) == 0);
+}
+
+void PS3_SF2_Lock(void)    { if (sf2_lock_ok) sysMutexLock(sf2_lock, 0); }
+int  PS3_SF2_TryLock(void) { return sf2_lock_ok ? sysMutexTryLock(sf2_lock) == 0 : 1; }
+void PS3_SF2_Unlock(void)  { if (sf2_lock_ok) sysMutexUnlock(sf2_lock); }
+
+#ifdef PS3_SF2_SPU
+
 #include <sys/spu.h>
 #include <sys/event_queue.h>
 

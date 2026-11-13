@@ -45,6 +45,10 @@
 #include "driver_ps3.h"
 #include "ps3_platform.h"
 
+/* the synth renders its next buffer of music before the mix, outside
+   the lock (driver_sf2.cpp) */
+extern "C" void SF2_PS3_Prerender(void);
+
 #define PS3_AUDIO_RATE   48000
 /* 6 of the 8 blocks queued ahead (32 ms): room for a slow mix (the
    SoundFont synth) before the hardware catches up with the writer */
@@ -130,6 +134,8 @@ FillBlock(float *dst)
 
     if (Playing)
     {
+        SF2_PS3_Prerender();
+
         PS3Drv_PCM_Lock();
         FillData((uint8_t *)blockbuf, (int)sizeof(blockbuf));
         PS3Drv_PCM_Unlock();
@@ -145,6 +151,7 @@ FillBlock(float *dst)
 
 /* the SoundFont synth's numbers (driver_sf2.cpp), when it has some */
 extern "C" const char *SF2_PS3_TakeStatsMessage(void);
+
 
 /* what filling a block costs (the whole mix: effects, music, synth),
    and how close the writer came to the hardware: in the log every 10 s */

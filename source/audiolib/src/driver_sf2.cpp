@@ -56,6 +56,18 @@ extern "C" unsigned long long PS3_Micros(void);
 extern "C" void PS3_Log(const char *fmt, ...);
 #include <malloc.h>
 
+/* the synth's lock and the music rendered ahead (see SF2Drv_MIDI_Service) */
+extern "C" {
+void PS3_SF2_LockInit(void);
+void PS3_SF2_Lock(void);
+int  PS3_SF2_TryLock(void);
+void PS3_SF2_Unlock(void);
+}
+
+static int16_t      sf2_stage[MV_MIXBUFFERSIZE * 2];
+static volatile int sf2_staged;     /* sf2_stage holds the next buffer */
+static int          sf2_active;     /* hooked and playing (the lock) */
+
 #ifdef PS3_SF2_SPU
 #include "sf2spu_wire.h"
 
@@ -279,9 +291,14 @@ static int SF2_LoadBank(char const *const filename)
 
     if (sf2_kfd != buildvfs_kfd_invalid)
     {
-        tsf_close(sf2_synth);
 #ifdef __PPU__
+        PS3_SF2_Lock();
+        tsf_close(sf2_synth);
+        sf2_synth = nullptr;
+        PS3_SF2_Unlock();
         size_t const heap0 = mallinfo().uordblks;
+#else
+        tsf_close(sf2_synth);
 #endif
         sf2_synth = tsf_load(&sf2_stream);
         kclose(sf2_kfd);
@@ -302,6 +319,9 @@ static int SF2_LoadBank(char const *const filename)
 
 int SF2Drv_MIDI_Init(midifuncs* const funcs)
 {
+#ifdef __PPU__
+    PS3_SF2_LockInit();
+#endif
     SF2Drv_MIDI_Shutdown();
 
     auto filename = SF2_BankFile;
@@ -352,15 +372,37 @@ int SF2Drv_MIDI_Init(midifuncs* const funcs)
     return SF2_Ok;
 }
 
-void SF2Drv_MIDI_HaltPlayback(void) { MV_UnhookMusicRoutine(); }
+#ifdef __PPU__
+static void SF2_SetActive(int active)
+{
+    PS3_SF2_Lock();
+    sf2_active = active;
+    sf2_staged = 0;
+    PS3_SF2_Unlock();
+}
+#endif
+
+void SF2Drv_MIDI_HaltPlayback(void)
+{
+    MV_UnhookMusicRoutine();
+#ifdef __PPU__
+    SF2_SetActive(0);
+#endif
+}
 
 void SF2Drv_MIDI_Shutdown(void)
 {
     SF2Drv_MIDI_HaltPlayback();
 
+#ifdef __PPU__
+    PS3_SF2_Lock();
+#endif
     tsf_close(sf2_synth);
     sf2_synth = nullptr;
     ErrorCode = SF2_Ok;
+#ifdef __PPU__
+    PS3_SF2_Unlock();
+#endif
 }
 
 int SF2Drv_MIDI_StartPlayback(void)
@@ -380,6 +422,9 @@ int SF2Drv_MIDI_StartPlayback(void)
     for (int channel = 0; channel < 16; channel++)
         SF2_ProgramChange(channel, 0);
 
+#ifdef __PPU__
+    SF2_SetActive(1);
+#endif
     MV_HookMusicRoutine(SF2Drv_MIDI_Service);
 
     return MIDI_Ok;
@@ -387,13 +432,19 @@ int SF2Drv_MIDI_StartPlayback(void)
 
 void SF2Drv_MIDI_SetTempo(int const tempo, int const division)
 {
+#ifdef __PPU__
+    PS3_SF2_Lock();
+#endif
     MV_MIDIRenderTempo = tempo * division / 60;
     MV_MIDIRenderTimer = 0;
+#ifdef __PPU__
+    PS3_SF2_Unlock();
+#endif
 }
 
-void SF2Drv_MIDI_Service(void)
+/* the next MV_MIXBUFFERSIZE frames of music, MIDI events included */
+static void SF2_RenderMusic(int16_t *buffer16)
 {
-    int16_t *    buffer16 = (int16_t *)MV_MusicBuffer;
     static float fbuf[MV_MIXBUFFERSIZE * 2];
     float const  fvolume = SF2_Volume * (32768.f / MIDI_MaxVolume);
 #ifdef __PPU__
@@ -428,3 +479,67 @@ void SF2Drv_MIDI_Service(void)
     SF2_Stats((unsigned)(PS3_Micros() - t0));
 #endif
 }
+
+#ifdef __PPU__
+/*
+ * PS3: the music renders ahead, outside the PCM driver's lock.
+ *
+ * MultiVoc mixes with the driver locked (as SDL does), and every sound
+ * the game starts or moves (MV_BeginService) waits for that lock: with
+ * the synth inside the mix, a frame could wait milliseconds for it. So
+ * the audio thread renders the next buffer of music first, holding only
+ * the synth's own lock (SF2_PS3_Prerender, from driver_ps3.cpp), and the
+ * mix just copies it in (SF2Drv_MIDI_Service), right after: no added
+ * latency.
+ *
+ * The synth's lock (recursive) covers the synth and the MIDI player's
+ * state: the prerender, the driver's MIDI_Lock (midi.cpp, the game
+ * thread), start/halt/shutdown. Never taken with the driver's lock
+ * already held, except as a try (the mix's fallback), so the two never
+ * wait for each other in opposite orders.
+ */
+
+void SF2Drv_MIDI_Lock(void)   { PS3_SF2_Lock(); }
+void SF2Drv_MIDI_Unlock(void) { PS3_SF2_Unlock(); }
+
+extern "C" void SF2_PS3_Prerender(void)
+{
+    if (sf2_staged)
+        return;
+
+    PS3_SF2_Lock();
+
+    if (sf2_active && sf2_synth && !sf2_staged)
+    {
+        SF2_RenderMusic(sf2_stage);
+        sf2_staged = 1;
+    }
+
+    PS3_SF2_Unlock();
+}
+
+void SF2Drv_MIDI_Service(void)
+{
+    size_t const bytes = MV_MIXBUFFERSIZE * MV_Channels * sizeof(int16_t);
+
+    if (sf2_staged)
+    {
+        Bmemcpy(MV_MusicBuffer, sf2_stage, bytes);
+        sf2_staged = 0;
+    }
+    else if (PS3_SF2_TryLock())
+    {
+        /* not rendered ahead (the mix and the hardware blocks out of
+           step): here, as before */
+        if (sf2_active && sf2_synth)
+            SF2_RenderMusic((int16_t *)MV_MusicBuffer);
+        else
+            Bmemset(MV_MusicBuffer, 0, bytes);
+        PS3_SF2_Unlock();
+    }
+    else
+        Bmemset(MV_MusicBuffer, 0, bytes);   /* the game holds the synth: one buffer of silence */
+}
+#else
+void SF2Drv_MIDI_Service(void) { SF2_RenderMusic((int16_t *)MV_MusicBuffer); }
+#endif

@@ -172,8 +172,13 @@ static struct
         SF2Drv_MIDI_StartPlayback,
         SF2Drv_MIDI_HaltPlayback,
         SF2Drv_MIDI_SetTempo,
+#ifdef __PPU__
+        SF2Drv_MIDI_Lock,      // PS3: the synth renders outside the PCM lock
+        SF2Drv_MIDI_Unlock,
+#else
         nullptr,
         nullptr,
+#endif
         SF2Drv_MIDI_Service,
     },
 
