@@ -199,13 +199,16 @@ static void SF2_RenderSPU(tsf *f, float *buffer, int samples)
 #define SF2_RENDER(f, buf, n) tsf_render_float(f, buf, n, 0)
 #endif
 
+static int      sf2_tempo_bpm, sf2_tempo_division;
+static unsigned sf2_tempo_changes;
+
 static unsigned long long sf2_stat_last;
 static unsigned sf2_stat_calls, sf2_stat_us, sf2_stat_max;
 
 /* written here, inside the mix (the driver locked); logged by the audio
    thread after it (driver_ps3.cpp), so the log's file I/O never runs with
    the driver locked */
-static char         sf2_stat_msg[320];
+static char         sf2_stat_msg[448];
 static volatile int sf2_stat_ready;
 
 extern "C" const char *SF2_PS3_TakeStatsMessage(void)
@@ -235,10 +238,13 @@ static void SF2_Stats(unsigned us)
 #ifdef PS3_SF2_SPU
     unsigned jobs, voices, misses, waits, spu_us, spu_max;
     PS3_SF2SPU_TakeStats(&jobs, &voices, &misses, &waits, &spu_us, &spu_max);
-    snprintf(sf2_stat_msg, sizeof(sf2_stat_msg), "[sf2] %u buffers, %u us avg, %u us max (%.1f%% of real time); SPU: %u jobs, %.1f voices, %u lines (%u waited), %u us avg, %u us max",
+    snprintf(sf2_stat_msg, sizeof(sf2_stat_msg), "[sf2] %u buffers, %u us avg, %u us max (%.1f%% of real time); SPU: %u jobs, %.1f voices, %u lines (%u waited), %u us avg, %u us max; "
+            "MIDI %d bpm x %d ppq = %d ticks/s (%u tempo changes), %d voices allocated",
             sf2_stat_calls, sf2_stat_us / sf2_stat_calls, sf2_stat_max,
             sf2_stat_us * 100.0 / (double)(now - sf2_stat_last), jobs, jobs ? voices / (double)jobs : 0.0, misses, waits,
-            jobs ? spu_us / jobs : 0, spu_max);
+            jobs ? spu_us / jobs : 0, spu_max, sf2_tempo_bpm, sf2_tempo_division, MV_MIDIRenderTempo, sf2_tempo_changes,
+            sf2_synth ? sf2_synth->voiceNum : 0);
+    sf2_tempo_changes = 0;
 #else
     snprintf(sf2_stat_msg, sizeof(sf2_stat_msg), "[sf2] %u buffers, %u us avg, %u us max (%.1f%% of real time, PPU)",
             sf2_stat_calls, sf2_stat_us / sf2_stat_calls, sf2_stat_max,
@@ -416,6 +422,13 @@ int SF2Drv_MIDI_StartPlayback(void)
                    TSF_INTERP_CUBIC,
 #endif
                    MV_MixRate, 0);
+#ifdef __PPU__
+    // PS3: at most as many voices as the SPU takes in one job (the rest
+    // rendered on the PPU, slowly); past that tsf takes the voice furthest
+    // into its release. Without a limit tsf adds voices for as long as
+    // notes keep coming without ending (96 and more, seen in the autotest).
+    tsf_set_max_voices(sf2_synth, 96);
+#endif
     tsf_channel_set_bank_preset(sf2_synth, 9, 128, 0);
     tsf_reset(sf2_synth);
 
@@ -434,6 +447,9 @@ void SF2Drv_MIDI_SetTempo(int const tempo, int const division)
 {
 #ifdef __PPU__
     PS3_SF2_Lock();
+    sf2_tempo_bpm = tempo;
+    sf2_tempo_division = division;
+    sf2_tempo_changes++;
 #endif
     MV_MIDIRenderTempo = tempo * division / 60;
     MV_MIDIRenderTimer = 0;

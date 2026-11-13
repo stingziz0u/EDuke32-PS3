@@ -62,7 +62,10 @@ static int AT_NextLevel(int &vol, int &lev)
 {
     for (int v = vol, l = lev + 1; v < g_volumeCnt && v < MAXVOLUMES; v++, l = 0)
         for (; l < MAXLEVELS; l++)
-            if (g_mapInfo[v * MAXLEVELS + l].filename != NULL)
+            // named in the CON files and really there (E1L9 is in GAME.CON's
+            // list but not in the GRP: the autotest stopped at its error)
+            if (g_mapInfo[v * MAXLEVELS + l].filename != NULL &&
+                testkopen(g_mapInfo[v * MAXLEVELS + l].filename, 0))
             {
                 vol = v;
                 lev = l;

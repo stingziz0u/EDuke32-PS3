@@ -41,6 +41,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "pragmas.h"
 #include "sndcards.h"
 
+#ifdef __PPU__
+extern "C" void PS3_Log(const char *fmt, ...);
+#endif
+
 extern int MV_MixRate;
 extern int ASS_MIDISoundDriver;
 
@@ -771,6 +775,10 @@ int MIDI_PlaySong(char *song, int loopflag)
         MIDI_Reset();
 
     _MIDI_Reset = FALSE;
+
+#ifdef __PPU__
+    PS3_Log("[midi] new song: format %d, %d tracks, %d ticks per quarter note", format, _MIDI_NumTracks, _MIDI_Division);
+#endif
 
     // this can either stay like this, or I can add another field to the MIDI driver spec that holds the service callback
     if (SoundDriver_MIDI_StartPlayback() != MIDI_Ok)
