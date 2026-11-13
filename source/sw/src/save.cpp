@@ -220,6 +220,20 @@ int LoadSymCodeInfo(MFILE_READ fil, void **ptr)
 }
 
 
+// "game<n>.sav", in the game's own folder on the PS3 (-game_dir: one
+// per game the launcher starts, as EDuke32's)
+static void SaveFileName(char *name, size_t size, short save_num)
+{
+#ifdef __PPU__
+    if (g_modDir[0] != '/' || g_modDir[1] != 0)
+    {
+        Bsnprintf(name, size, "%s/game%d.sav", g_modDir, save_num);
+        return;
+    }
+#endif
+    Bsnprintf(name, size, "game%d.sav", save_num);
+}
+
 int SaveGame(short save_num)
 {
     MFILE_WRITE fil;
@@ -241,7 +255,7 @@ int SaveGame(short save_num)
 
     Saveable_Init();
 
-    sprintf(game_name,"game%d.sav",save_num);
+    SaveFileName(game_name, sizeof(game_name), save_num);
     if ((fil = MOPEN_WRITE(game_name)) == MOPEN_WRITE_ERR)
         return -1;
 
@@ -702,7 +716,7 @@ int LoadGameFullHeader(short save_num, char *descr, short *level, short *skill)
     short tile;
     int ver;
 
-    sprintf(game_name,"game%d.sav",save_num);
+    SaveFileName(game_name, sizeof(game_name), save_num);
     if ((fil = MOPEN_READ(game_name)) == MOPEN_READ_ERR)
         return -1;
 
@@ -732,7 +746,7 @@ void LoadGameDescr(short save_num, char *descr)
     char game_name[80];
     int ver;
 
-    sprintf(game_name,"game%d.sav",save_num);
+    SaveFileName(game_name, sizeof(game_name), save_num);
     if ((fil = MOPEN_READ(game_name)) == MOPEN_READ_ERR)
         return;
 
@@ -767,7 +781,7 @@ int LoadGame(short save_num)
 
     Saveable_Init();
 
-    sprintf(game_name,"game%d.sav",save_num);
+    SaveFileName(game_name, sizeof(game_name), save_num);
     if ((fil = MOPEN_READ(game_name)) == MOPEN_READ_ERR)
         return -1;
 

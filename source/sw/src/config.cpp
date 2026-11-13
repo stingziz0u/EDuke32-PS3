@@ -377,11 +377,21 @@ void CONFIG_SetDefaults(void)
     else
 #endif
     {
+#ifdef __PPU__
+        // PS3: the internal resolution, which the RSX scales to the 720p
+        // output (as EDuke32's)
+        ud_setup.ScreenWidth = 848;
+        ud_setup.ScreenHeight = 480;
+#else
         ud_setup.ScreenWidth = 1024;
         ud_setup.ScreenHeight = 768;
+#endif
     }
 
     ud_setup.ScreenBPP = 32;
+#ifdef __PPU__
+    ud_setup.UseJoystick = 1;
+#endif
     FXToggle = 1;
     MusicToggle = 1;
     FXDevice = 0;
@@ -741,6 +751,9 @@ int32_t CONFIG_ReadSetup(void)
 
     SCRIPT_GetNumber(scripthandle, "Controls","UseMouse",&ud_setup.UseMouse);
     SCRIPT_GetNumber(scripthandle, "Controls","UseJoystick",&ud_setup.UseJoystick);
+#ifdef __PPU__
+    ud_setup.UseJoystick = 1;   // the PS3 has nothing else
+#endif
     SCRIPT_GetString(scripthandle, "Comm Setup", "RTSName",RTSName);
 
     SCRIPT_GetString(scripthandle, "Comm Setup","PlayerName",CommPlayerName);

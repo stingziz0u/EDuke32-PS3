@@ -140,7 +140,7 @@ PS3_LogInit(void)
 
 	if (logfp)
 	{
-		fputs("=== EDuke32 (PS3) log ===\n", logfp);
+		fputs("=== " PS3_GAME_NAME " (PS3) log ===\n", logfp);
 		fflush(logfp);
 	}
 }

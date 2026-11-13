@@ -3367,6 +3367,26 @@ int32_t app_main(int32_t argc, char const * const * argv)
         }
     }
 
+#ifdef __PPU__
+    // PS3: the launcher's choice (ps3/source/ps3_launcher.c), before the
+    // setup is read: the game's file (its add-on chain from grpscan) and
+    // the folder of its saves, as EDuke32's -gamegrp and -game_dir
+    for (cnt = 1; cnt < argc - 1; ++cnt)
+    {
+        if (!Bstrcasecmp(argv[cnt], "-gamegrp"))
+        {
+            clearGrpNamePtr();
+            g_grpNamePtr = dup_filename(argv[++cnt]);
+        }
+        else if (!Bstrcasecmp(argv[cnt], "-game_dir"))
+        {
+            Bstrncpyz(g_modDir, argv[++cnt], sizeof(g_modDir));
+            buildvfs_mkdir(g_modDir, S_IRWXU);
+            LOG_F(INFO, "Saves in %s", g_modDir);
+        }
+    }
+#endif
+
     // hackish since SW's init order is a bit different right now
     if (G_CheckCmdSwitch(argc, argv, "-addon0"))
     {
@@ -3394,6 +3414,23 @@ int32_t app_main(int32_t argc, char const * const * argv)
     }
 
     SW_ScanGroups();
+
+#ifdef __PPU__
+    // a file the launcher found but no version of a game VoidSW knows
+    if (g_grpNamePtr && G_CheckCmdSwitch(argc, argv, "-gamegrp"))
+    {
+        grpfile_t const *fg = foundgrps;
+
+        while (fg && Bstrcasecmp(fg->filename, g_grpNamePtr))
+            fg = fg->next;
+
+        if (!fg)
+        {
+            wm_msgbox("Unknown game data", "%s is not a version of a game VoidSW knows (its checksum is in grpfiles.cache).", g_grpNamePtr);
+            swexit(1);
+        }
+    }
+#endif
 
 #ifdef STARTUP_SETUP_WINDOW
     if (i < 0 || CommandSetup || (ud_setup.ForceSetup && !g_noSetup))
@@ -3854,6 +3891,10 @@ int32_t app_main(int32_t argc, char const * const * argv)
                 kclose(fil);
         }
 
+#ifdef __PPU__
+        else if (!Bstrcasecmp(arg, "gamegrp") || !Bstrcasecmp(arg, "game_dir"))
+            cnt++;   // read above, before the setup
+#endif
         else if (Bstrncasecmp(arg, "g", 1) == 0 && !SW_SHAREWARE)
         {
             if (strlen(arg) > 1)

@@ -5,3 +5,7 @@
 /*.self
 /*.pkg
 /pkgfiles/USRDIR/VERSION.TXT
+/obj-sw/
+/build-sw/
+/pkgfiles-sw/USRDIR/VERSION.TXT
+/ICON0-SW.PNG

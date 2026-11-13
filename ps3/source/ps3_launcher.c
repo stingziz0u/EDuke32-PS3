@@ -268,12 +268,27 @@ AddSearchPath(const char *dir)
     if (!dir[0] || !strcmp(dir, PS3_USRDIR))
         return;
 
+#ifdef PS3_GAME_SW
+    /* VoidSW: -j<dir>, in one */
+    {
+        char arg[MAX_PATH_LEN];
+
+        snprintf(arg, sizeof(arg), "-j%s", dir);
+
+        for (i = 1; i < arg_count; i++)
+            if (!strcmp(arg_ptrs[i], arg))
+                return;
+
+        AddArg(arg);
+    }
+#else
     for (i = 1; i + 1 < arg_count; i++)
         if (!strcmp(arg_ptrs[i], "-j") && !strcmp(arg_ptrs[i + 1], dir))
             return;
 
     AddArg("-j");
     AddArg(dir);
+#endif
 }
 
 static int
@@ -314,9 +329,15 @@ ArgsForEntry(const entry_t *e)
 
     if (e->known < 0)
     {
+#ifdef PS3_GAME_SW
+        /* VoidSW: -g<file>, in one */
+        snprintf(path, sizeof(path), "-g%s/%s", e->dir, e->file);
+        AddArg(path);
+#else
         snprintf(path, sizeof(path), "%s/%s", e->dir, e->file);
         AddArg("-grp");
         AddArg(path);
+#endif
     }
 
     /* the game's own saves folder (made here: the engine makes only the

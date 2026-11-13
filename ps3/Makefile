@@ -4,6 +4,7 @@
 # From the root of the tree (~/EDuke32-PS3):
 #
 #   make -C ps3            -> ps3/eduke32-ps3-<version>.pkg
+#   make -C ps3 GAME=sw    -> ps3/voidsw-ps3-<version>.pkg (Shadow Warrior)
 #   make -C ps3 clean
 #   make -C ps3 verify     -> patch level of the tree and of the PKG
 #   make -C ps3 check-toolchain
@@ -61,6 +62,28 @@ ESRC       := $(SRC)/source
 OBJDIR     := $(CURDIR)/obj
 BUILDDIR   := $(CURDIR)/build
 
+# The game: EDuke32 (Duke Nukem 3D and its add-ons, the default) or VoidSW
+# (Shadow Warrior, Wanton Destruction, Twin Dragon) with "make GAME=sw".
+# One engine, one PS3 layer, two programs and two packages.
+GAME       ?= duke3d
+
+ifeq ($(GAME),sw)
+TARGET     := voidsw-ps3
+TITLE      := VoidSW
+APPID      := SHADOWPS3
+CONTENTID  := UP0001-$(APPID)_00-0000000000000000
+PKGFILES   := $(CURDIR)/pkgfiles-sw
+ICON0      := $(CURDIR)/ICON0-SW.PNG
+OUT_PKG    := voidsw-ps3-$(VERSION).pkg
+OBJDIR     := $(CURDIR)/obj-sw
+BUILDDIR   := $(CURDIR)/build-sw
+GAME_SRC   := sw
+else ifeq ($(GAME),duke3d)
+GAME_SRC   := duke3d
+else
+$(error GAME is duke3d or sw)
+endif
+
 CC         := ppu-gcc
 CXX        := ppu-g++
 LD         := ppu-g++
@@ -91,6 +114,9 @@ COMMON += -DHAVE_VORBIS -DHAVE_XMP -D_GNU_SOURCE=1 -DUSE_OPENGL
 COMMON += -DB_LITTLE_ENDIAN=0 -DB_BIG_ENDIAN=1
 COMMON += -D__PS3__ -DPS3_APPID=\"$(APPID)\" -DPS3_BUILD_DATE=\"$(BUILD_DATE)\"
 COMMON += -DPS3_VERSION=\"$(VERSION)\" -DPS3_PATCHLEVEL=$(PATCHLEVEL)
+ifeq ($(GAME),sw)
+COMMON += -DPS3_GAME_SW
+endif
 
 INCLUDES := -I$(ESRC)/build/include -I$(ESRC)/mact/include -I$(ESRC)/audiolib/include
 INCLUDES += -I$(ESRC)/libxmp-lite/include -I$(ESRC)/glad/include -I$(CURDIR)/source -I$(CURDIR)/compat
@@ -111,6 +137,9 @@ PCFLAGS  := -O2 -std=gnu99 -Wall -fno-strict-aliasing -fno-common -mcpu=cell $(M
 PCFLAGS  += -Werror=implicit-function-declaration -Werror=int-conversion -MMD -MP
 PCFLAGS  += -DPS3_APPID=\"$(APPID)\" -DPS3_BUILD_DATE=\"$(BUILD_DATE)\"
 PCFLAGS  += -I$(CURDIR)/source -I$(CURDIR)/compat $(LIBPSL1GHT_INC)
+ifeq ($(GAME),sw)
+PCFLAGS  += -DPS3_GAME_SW
+endif
 
 # -lrt and -llv2 are MANDATORY: without them the binary links cleanly, the
 # PKG installs, and it never reaches main(). Black screen, back to the XMB,
@@ -150,15 +179,31 @@ XMP_C     := common control dataio effects filter format hio it_load itsex lfo l
 	load_helpers memio mix_all mixer mod_load mtm_load period player read_event \
 	s3m_load sample scan smix virtual win32 xm_load
 
+# VoidSW's (GNUmakefile's sw_game_objs: everything but the editor's and
+# the startup windows)
+SW_CPP    := actor ai anim border break bunny cache cheats colormap common config \
+	console coolg coolie copysect demo draw eel game girlninj goro grpscan hornet \
+	interp interpsh interpso inv jplayer jsector jweapon lava light mclip mdastr \
+	menus miscactr morph network ninja panel player predict quake ripper ripper2 \
+	rooms rotator rts save saveable scrip2 sector serp setup skel skull slidor \
+	sounds spike sprite sumo swconfig sync text track vator vis wallmove warp \
+	weapon zilla zombie
+
 # The PS3 pieces that are part of the game (renamed with the engine):
-# what the layer asks of Duke.
+# what the layer asks of the game.
+ifeq ($(GAME),sw)
+GAME_CPP    := $(SW_CPP)
+GAMEPS3_CPP := ps3_game_sw
+else
+GAME_CPP    := $(DUKE_CPP)
 GAMEPS3_CPP := ps3_game_duke3d
+endif
 
 ENGINE_OBJS := \
 	$(patsubst %,$(OBJDIR)/build/%.o,$(BUILD_CPP) $(BUILD_C)) \
 	$(patsubst %,$(OBJDIR)/glsl/%.o,$(GLSL)) \
 	$(OBJDIR)/glad/glad.o \
-	$(patsubst %,$(OBJDIR)/duke3d/%.o,$(DUKE_CPP)) \
+	$(patsubst %,$(OBJDIR)/$(GAME_SRC)/%.o,$(GAME_CPP)) \
 	$(patsubst %,$(OBJDIR)/audiolib/%.o,$(AUDIO_CPP)) \
 	$(patsubst %,$(OBJDIR)/mact/%.o,$(MACT_CPP)) \
 	$(patsubst %,$(OBJDIR)/libxmp/%.o,$(XMP_C)) \
@@ -217,9 +262,16 @@ $(OBJDIR)/ps3/ps3_video.o: PCFLAGS := $(filter-out -O2,$(PCFLAGS)) -O1 -fno-inli
 # TOC entry per file); the renderer, the game's VM and the per-tic game
 # logic keep direct TOC access. 'make check' (after every link) fails the
 # build if .got reaches 0x10000 or any r2off stub shows up.
+ifeq ($(GAME),sw)
+MINTOC_GAME := $(patsubst %,$(OBJDIR)/sw/%.o,menus config swconfig setup console cheats \
+	common grpscan save saveable demo network rts scrip2 colormap anim game text border)
+else
+MINTOC_GAME := $(patsubst %,$(OBJDIR)/duke3d/%.o,menus osdcmds osdfuncs config cmdline \
+	grpscan savegame demo anim premap rts gamedef global cheats network dnames common)
+endif
+
 MINTOC_OBJS := \
-	$(patsubst %,$(OBJDIR)/duke3d/%.o,menus osdcmds osdfuncs config cmdline grpscan \
-		savegame demo anim premap rts gamedef global cheats network dnames common) \
+	$(MINTOC_GAME) \
 	$(patsubst %,$(OBJDIR)/build/%.o,defs osd loguru kplib compat scriptfile common \
 		baselayer mhk md4 hightile sjson cache1d colmatch pngwrite screenshot crc32 \
 		communityapi cpuid rev smmalloc smmalloc_generic smmalloc_tls texcache \
@@ -312,6 +364,11 @@ $(OBJDIR)/duke3d/%.o: $(ESRC)/duke3d/src/%.cpp
 	@echo "CXX duke3d/$*.cpp"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(OBJDIR)/sw/%.o: $(ESRC)/sw/src/%.cpp
+	@mkdir -p $(dir $@)
+	@echo "CXX sw/$*.cpp"
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(OBJDIR)/audiolib/%.o: $(ESRC)/audiolib/src/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "CXX audiolib/$*.cpp"
@@ -342,7 +399,7 @@ $(OBJDIR)/libxmp/%.o: $(ESRC)/libxmp-lite/src/%.c
 $(OBJDIR)/gameps3/%.o: $(CURDIR)/source/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "CXX ps3/$*.cpp (game)"
-	@$(CXX) $(CXXFLAGS) -I$(ESRC)/duke3d/src -c $< -o $@
+	@$(CXX) $(CXXFLAGS) -I$(ESRC)/$(GAME_SRC)/src -c $< -o $@
 
 $(OBJDIR)/ps3/%.o: $(CURDIR)/source/%.cpp
 	@mkdir -p $(dir $@)
@@ -383,7 +440,7 @@ $(TARGET).elf: $(OBJDIR)/engine.o $(LAYER_OBJS)
 
 $(PKGFILES)/USRDIR/VERSION.TXT: FORCE
 	@mkdir -p $(PKGFILES)/USRDIR
-	@echo "$(TITLE) -- eduke32-ps3 $(VERSION) -- patch $(PATCHLEVEL) -- $(BUILD_DATE)" > $@.tmp
+	@echo "$(TITLE) -- $(TARGET) $(VERSION) -- patch $(PATCHLEVEL) -- $(BUILD_DATE)" > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
 $(ICON0):

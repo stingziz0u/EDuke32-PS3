@@ -619,7 +619,7 @@ void PS3_FatalScreen(const char *title, const char *message)
     PS3_Log("[error] %s: %s", title ? title : "", message ? message : "");
     snprintf(last_error, sizeof(last_error), "%s%s%s", title ? title : "", title ? ": " : "",
              message ? message : "");
-    ShowText(title, message, "Details: USRDIR/eduke32-ps3.log", "Press X to go on.");
+    ShowText(title, message, "Details: USRDIR/" PS3_PROGRAM ".log", "Press X to go on.");
     WaitForButtons(PS3_PAD_CROSS, 120);
 }
 
@@ -1193,7 +1193,7 @@ static int GLSetMode(int32_t x, int32_t y)
 
     if (PS3GL_Init(x, y) != 0)
     {
-        LOG_F(ERROR, "ps3gl failed to start (see eduke32-ps3.log).");
+        LOG_F(ERROR, "ps3gl failed to start (see " PS3_PROGRAM ".log).");
         nogl = 1;
         return -1;
     }
@@ -1560,6 +1560,15 @@ static void NoDataScreen(void)
     {
         "No game data found.",
         "",
+#ifdef PS3_GAME_SW
+        "Copy the files of YOUR copy of Shadow Warrior",
+        "(GOG, Steam, CD or the shareware) by FTP to:",
+        "  " PS3_USRDIR "/",
+        "",
+        "or to its addons folder. At least SW.GRP; the add-ons",
+        "(WT.GRP for Wanton Destruction, TD.GRP for Twin Dragon)",
+        "and the music (Track02.ogg...) in the same folders.",
+#else
         "Copy the files of YOUR copy of Duke Nukem 3D",
         "(GOG, Steam, CD or the shareware) by FTP to:",
         "  " PS3_USRDIR "/",
@@ -1567,13 +1576,14 @@ static void NoDataScreen(void)
         "or to its addons folder. At least DUKE3D.GRP; the add-ons",
         "(DUKEDC.GRP, VACATION.GRP, NWINTER.GRP...) in the same",
         "folders, or each in a folder of its own inside addons.",
+#endif
         "",
         "Press X to go back to the XMB.",
     };
 
     PS3_Log("[7] no game data: showing the instructions");
 
-    TextScreen("EDUKE32", lines, ARRAY_SIZE(lines));
+    TextScreen(PS3_GAME_SW_OR("VOIDSW", "EDUKE32"), lines, ARRAY_SIZE(lines));
     WaitForButtons(PS3_PAD_CROSS, 120);
 }
 
@@ -1583,12 +1593,14 @@ static void GameMain(void)
     char **argv = nullptr;
     // the launcher's command line, and the autotest's own after it
     static char *args[32];
+#ifndef PS3_GAME_SW
     static char at1[] = "-v1", at2[] = "-l1", at3[] = "-s4";
+#endif
 
     PS3_Log("[1] game thread running");
 
     {
-        extern int ps3_autotest;   // ps3_game_duke3d.cpp
+        extern int ps3_autotest;   // ps3_game_*.cpp
         // the layer calls the real fopen (not ps3_stdio.c's): no working
         // directory on lv2, the full path
         FILE *f = fopen(PS3_USRDIR "/autotest.txt", "r");
@@ -1639,13 +1651,16 @@ static void GameMain(void)
         for (; n < argc && n < (int)ARRAY_SIZE(args) - 4; n++)
             args[n] = argv[n];
 
-        // autotest: straight into E1L1, the hardest skill
+        // autotest: straight into E1L1, the hardest skill (Duke's: SW has
+        // no autotest yet, ps3_game_sw.cpp)
+#ifndef PS3_GAME_SW
         if (ps3_autotest)
         {
             args[n++] = at1;
             args[n++] = at2;
             args[n++] = at3;
         }
+#endif
 
         args[n] = nullptr;
         argc = n;
@@ -1691,7 +1706,7 @@ int main(int argc, char *argv[])
     PS3_Log("[0] main() reached (%s)", PS3_BUILD_DATE);
 
     s32 const r = sysThreadCreate(&tid, GameThread, NULL, 1000, GAME_STACK_SIZE,
-                                  THREAD_JOINABLE, (char *)"dukegame");
+                                  THREAD_JOINABLE, (char *)PS3_GAME_SW_OR("swgame", "dukegame"));
 
     if (r != 0)
     {

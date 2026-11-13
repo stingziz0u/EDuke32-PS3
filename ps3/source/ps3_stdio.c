@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -251,11 +252,209 @@ FixPath(const char *path, char *out, size_t size)
 	return out;
 }
 
+/* ---------------------------------------------------------------- */
+/* Names in any case                                                  */
+/*                                                                    */
+/* The HDD's file system tells "Track02.ogg" from "TRACK02.OGG", and  */
+/* the games ask for their files in the case of their DOS days, while */
+/* the copies sold today (GOG, Steam, a CD copied on a PC) come in    */
+/* any. When a file or folder isn't there as asked, each name in the  */
+/* path is looked up again in its folder, the case ignored. Only on a */
+/* miss (most lookups find the file, or nothing in any case), and the */
+/* folders read are kept (a few), forgotten when anything is written. */
+/* ---------------------------------------------------------------- */
+
+#define CI_DIRS 8
+
+typedef struct
+{
+	char dir[512];
+	char *names;        /* "a\0b\0...\0\0" */
+	unsigned used;      /* for the least recently used */
+} ci_dir_t;
+
+static ci_dir_t ci_dirs[CI_DIRS];
+static unsigned ci_clock;
+
+static void
+CI_Forget(void)
+{
+	int i;
+
+	for (i = 0; i < CI_DIRS; i++)
+	{
+		free(ci_dirs[i].names);
+		ci_dirs[i].names = NULL;
+		ci_dirs[i].dir[0] = '\0';
+	}
+}
+
+/* The names in a folder, or NULL when it can't be read. */
+static const char *
+CI_List(const char *dir)
+{
+	ci_dir_t *slot = &ci_dirs[0];
+	struct dirent *de;
+	size_t size = 0, cap = 1024;
+	char *names;
+	DIR *d;
+	int i;
+
+	for (i = 0; i < CI_DIRS; i++)
+	{
+		if (ci_dirs[i].names && !strcmp(ci_dirs[i].dir, dir))
+		{
+			ci_dirs[i].used = ++ci_clock;
+			return ci_dirs[i].names;
+		}
+
+		if (ci_dirs[i].used < slot->used)
+		{
+			slot = &ci_dirs[i];
+		}
+	}
+
+	if (strlen(dir) >= sizeof(slot->dir) || !(d = opendir(dir)))
+	{
+		return NULL;
+	}
+
+	if (!(names = malloc(cap)))
+	{
+		closedir(d);
+		return NULL;
+	}
+
+	while ((de = readdir(d)) != NULL)
+	{
+		size_t const len = strlen(de->d_name) + 1;
+
+		if (size + len + 1 > cap)
+		{
+			char *const more = realloc(names, cap * 2 + len);
+
+			if (!more)
+			{
+				break;
+			}
+
+			names = more;
+			cap = cap * 2 + len;
+		}
+
+		memcpy(names + size, de->d_name, len);
+		size += len;
+	}
+
+	closedir(d);
+	names[size] = '\0';
+
+	free(slot->names);
+	slot->names = names;
+	strcpy(slot->dir, dir);
+	slot->used = ++ci_clock;
+
+	return names;
+}
+
+/* p (absolute, FixPath's): the name on disk of what it names in another
+   case. 1 if found (p changed), 0 if not (p as it was). */
+static int
+CI_Fix(char *p, size_t size)
+{
+	char out[1024];
+	const char *s = p;
+	size_t o = 0;
+	int changed = 0;
+
+	/* only under the HDD and the USB drives: /dev_hdd0/..., /dev_usb000/... */
+	if (strncmp(p, "/dev_hdd0/", 10) && strncmp(p, "/dev_usb", 8))
+	{
+		return 0;
+	}
+
+	/* the device itself as it is */
+	if (!(s = strchr(p + 1, '/')))
+	{
+		return 0;
+	}
+
+	o = (size_t)(s - p);
+	memcpy(out, p, o);
+	out[o] = '\0';
+
+	while (*s == '/')
+	{
+		const char *const comp = s + 1;
+		const char *end = strchr(comp, '/');
+		size_t const len = end ? (size_t)(end - comp) : strlen(comp);
+		const char *names, *n, *match = NULL;
+
+		if (!end)
+		{
+			end = comp + len;
+		}
+
+		if (o + 1 + len + 1 > sizeof(out))
+		{
+			return 0;
+		}
+
+		names = CI_List(out);
+
+		if (names)
+		{
+			for (n = names; *n; n += strlen(n) + 1)
+			{
+				if (strlen(n) != len)
+				{
+					continue;
+				}
+
+				if (!strncmp(n, comp, len))
+				{
+					match = n;   /* as asked */
+					break;
+				}
+
+				if (!match && !strncasecmp(n, comp, len))
+				{
+					match = n;
+				}
+			}
+
+			if (!match)
+			{
+				return 0;   /* not there in any case */
+			}
+
+			if (strncmp(match, comp, len))
+			{
+				changed = 1;
+			}
+		}
+
+		out[o++] = '/';
+		memcpy(out + o, match ? match : comp, len);
+		o += len;
+		out[o] = '\0';
+		s = end;
+	}
+
+	if (!changed || o + 1 > size)
+	{
+		return 0;
+	}
+
+	memcpy(p, out, o + 1);
+	return 1;
+}
+
 int
 PS3_open(const char *path, int flags, ...)
 {
 	char p[1024];
-	int mode = 0;
+	int mode = 0, fd;
 
 	if (flags & O_CREAT)
 	{
@@ -266,23 +465,69 @@ PS3_open(const char *path, int flags, ...)
 		va_end(ap);
 	}
 
-	return open(FixPath(path, p, sizeof(p)), flags, mode);
+	if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC)))
+	{
+		CI_Forget();
+	}
+
+	fd = open(FixPath(path, p, sizeof(p)), flags, mode);
+
+	if (fd < 0 && !(flags & O_CREAT))
+	{
+		int const err = errno;
+
+		if (!CI_Fix(p, sizeof(p)) || (fd = open(p, flags, mode)) < 0)
+		{
+			errno = err;
+		}
+	}
+
+	return fd;
 }
 
 FILE *
 PS3_fopen(const char *path, const char *mode)
 {
 	char p[1024];
+	FILE *f;
 
-	return fopen(FixPath(path, p, sizeof(p)), mode);
+	if (mode[0] != 'r' || strchr(mode, '+'))
+	{
+		CI_Forget();
+	}
+
+	f = fopen(FixPath(path, p, sizeof(p)), mode);
+
+	if (!f && mode[0] == 'r')
+	{
+		int const err = errno;
+
+		if (!CI_Fix(p, sizeof(p)) || !(f = fopen(p, mode)))
+		{
+			errno = err;
+		}
+	}
+
+	return f;
 }
 
 int
 PS3_stat(const char *path, struct stat *st)
 {
 	char p[1024];
+	int r = stat(FixPath(path, p, sizeof(p)), st);
 
-	return stat(FixPath(path, p, sizeof(p)), st);
+	if (r != 0)
+	{
+		int const err = errno;
+
+		if (!CI_Fix(p, sizeof(p)) || (r = stat(p, st)) != 0)
+		{
+			errno = err;
+		}
+	}
+
+	return r;
 }
 
 /* PSL1GHT's newlib has no access(): a stat() is as good for what the
@@ -308,6 +553,7 @@ PS3_mkdir(const char *path, mode_t mode)
 {
 	char p[1024];
 
+	CI_Forget();
 	return mkdir(FixPath(path, p, sizeof(p)), mode);
 }
 
@@ -315,8 +561,19 @@ DIR *
 PS3_opendir(const char *path)
 {
 	char p[1024];
+	DIR *d = opendir(FixPath(path, p, sizeof(p)));
 
-	return opendir(FixPath(path, p, sizeof(p)));
+	if (!d)
+	{
+		int const err = errno;
+
+		if (!CI_Fix(p, sizeof(p)) || !(d = opendir(p)))
+		{
+			errno = err;
+		}
+	}
+
+	return d;
 }
 
 int
@@ -324,6 +581,7 @@ PS3_remove(const char *path)
 {
 	char p[1024];
 
+	CI_Forget();
 	return remove(FixPath(path, p, sizeof(p)));
 }
 
@@ -332,6 +590,7 @@ PS3_unlink(const char *path)
 {
 	char p[1024];
 
+	CI_Forget();
 	return unlink(FixPath(path, p, sizeof(p)));
 }
 
@@ -340,6 +599,7 @@ PS3_rename(const char *from, const char *to)
 {
 	char a[1024], b[1024];
 
+	CI_Forget();
 	return rename(FixPath(from, a, sizeof(a)), FixPath(to, b, sizeof(b)));
 }
 

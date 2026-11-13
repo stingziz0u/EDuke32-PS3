@@ -34,16 +34,29 @@
 extern "C" {
 #endif
 
+/* The game this build is (ps3/Makefile, GAME=duke3d or GAME=sw) */
+#ifdef PS3_GAME_SW
+#define PS3_GAME_NAME   "VoidSW"
+#define PS3_PROGRAM     "voidsw-ps3"
+#define PS3_GAME_SW_OR(sw, duke) (sw)
+#ifndef PS3_APPID
+#define PS3_APPID "SHADOWPS3"
+#endif
+#else
+#define PS3_GAME_NAME   "EDuke32"
+#define PS3_PROGRAM     "eduke32-ps3"
+#define PS3_GAME_SW_OR(sw, duke) (duke)
 #ifndef PS3_APPID
 #define PS3_APPID "DUKE3DPS3"
+#endif
 #endif
 
 #ifndef PS3_USRDIR
 #define PS3_USRDIR "/dev_hdd0/game/" PS3_APPID "/USRDIR"
 #endif
 
-#define PS3_LOGFILE     PS3_USRDIR "/eduke32-ps3.log"
-#define PS3_LOGFILE_OLD PS3_USRDIR "/eduke32-ps3.old.log"
+#define PS3_LOGFILE     PS3_USRDIR "/" PS3_PROGRAM ".log"
+#define PS3_LOGFILE_OLD PS3_USRDIR "/" PS3_PROGRAM ".old.log"
 
 /* ps3_log.c */
 void PS3_LogInit(void);
