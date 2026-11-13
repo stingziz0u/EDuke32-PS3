@@ -46,7 +46,9 @@
 #include "ps3_platform.h"
 
 #define PS3_AUDIO_RATE   48000
-#define LEAD_BLOCKS      4
+/* 6 of the 8 blocks queued ahead (32 ms): room for a slow mix (the
+   SoundFont synth) before the hardware catches up with the writer */
+#define LEAD_BLOCKS      6
 
 enum
 {
@@ -141,6 +143,38 @@ FillBlock(float *dst)
     }
 }
 
+/* the SoundFont synth's numbers (driver_sf2.cpp), when it has some */
+extern "C" const char *SF2_PS3_TakeStatsMessage(void);
+
+/* what filling a block costs (the whole mix: effects, music, synth),
+   and how close the writer came to the hardware: in the log every 10 s */
+static unsigned long long fill_last;
+static unsigned fill_count, fill_us, fill_max, fill_minqueued = LEAD_BLOCKS;
+
+static void
+FillStats(unsigned us)
+{
+    unsigned long long const now = PS3_Micros();
+
+    fill_count++;
+    fill_us += us;
+    if (us > fill_max)
+        fill_max = us;
+    if (fill_last == 0)
+        fill_last = now;
+
+    if (now - fill_last < 10000000ull)
+        return;
+
+    PS3_Log("[audio] %u blocks, fill %u us avg, %u us max (%.1f%% of real time), lowest lead %u of %d blocks at wake-up",
+            fill_count, fill_us / fill_count, fill_max, fill_us * 100.0 / (double)(now - fill_last),
+            fill_minqueued, LEAD_BLOCKS);
+
+    fill_last = now;
+    fill_count = fill_us = fill_max = 0;
+    fill_minqueued = LEAD_BLOCKS;
+}
+
 static void
 AudioThread(void *arg)
 {
@@ -174,12 +208,23 @@ AudioThread(void *arg)
                 PS3_Log("[audio] writer restarted after the playing block");
         }
 
+        /* still queued when the thread woke: how close it came */
+        if ((unsigned)queued < fill_minqueued)
+            fill_minqueued = (unsigned)queued;
+
         while (queued < LEAD_BLOCKS)
         {
+            unsigned long long const t0 = PS3_Micros();
+
             FillBlock(data_start + next_fill * block_floats);
             next_fill = (next_fill + 1) % num_blocks;
             queued++;
+
+            FillStats((unsigned)(PS3_Micros() - t0));
         }
+
+        if (char const *const msg = SF2_PS3_TakeStatsMessage())
+            PS3_Log("%s", msg);
     }
 
     sysThreadExit(0);

@@ -41,6 +41,197 @@ int SF2_EffectSampleBlockSize = 16;
 
 static tsf *sf2_synth;
 char        SF2_BankFile[BMAX_PATH];
+
+#ifdef __PPU__
+/*
+ * PS3: the voices render on an SPU when the build has one (PS3_SF2_SPU,
+ * ps3/source/ps3_sf2spu.c and ps3/spu/sf2spu.c), on the PPU otherwise.
+ * tsf keeps everything else here: the font, the channels, note on/off.
+ * The time the synth takes goes to the log every 10 s.
+ */
+extern "C" unsigned long long PS3_Micros(void);
+
+#ifdef PS3_SF2_SPU
+#include "sf2spu_wire.h"
+
+extern "C" {
+int           PS3_SF2SPU_Available(void);
+sf2spu_job *  PS3_SF2SPU_Job(void);
+sf2spu_voice *PS3_SF2SPU_Voices(void);
+float const * PS3_SF2SPU_Out(void);
+int           PS3_SF2SPU_Run(void);
+void          PS3_SF2SPU_TakeStats(unsigned *jobs, unsigned *voices, unsigned *misses, unsigned *waits, unsigned *spu_us, unsigned *spu_max_us);
+}
+
+static_assert(sizeof(sf2w_voice_envelope) == sizeof(struct tsf_voice_envelope), "tsf_voice_envelope");
+static_assert(sizeof(sf2w_voice_lowpass) == sizeof(struct tsf_voice_lowpass), "tsf_voice_lowpass");
+static_assert(sizeof(sf2w_voice_lfo) == sizeof(struct tsf_voice_lfo), "tsf_voice_lfo");
+static_assert(offsetof(sf2w_voice_envelope, parameters) == offsetof(struct tsf_voice_envelope, parameters), "envelope parameters");
+static_assert(offsetof(sf2w_voice_envelope, segmentIsExponential) == offsetof(struct tsf_voice_envelope, segmentIsExponential), "envelope flags");
+static_assert(offsetof(sf2w_voice_lowpass, active) == offsetof(struct tsf_voice_lowpass, active), "lowpass active");
+
+static float const *sf2spu_font;
+
+static void SF2_RenderSPU(tsf *f, float *buffer, int samples)
+{
+    if (samples <= 0 || samples > SF2SPU_MAX_SAMPLES
+        || (f->outputmode != TSF_STEREO_INTERLEAVED && f->outputmode != TSF_MONO) || !PS3_SF2SPU_Available())
+    {
+        tsf_render_float(f, buffer, samples, 0);
+        return;
+    }
+
+    sf2spu_job *const   job = PS3_SF2SPU_Job();
+    sf2spu_voice *const w   = PS3_SF2SPU_Voices();
+    struct tsf_voice *  v = f->voices, *vEnd = v + f->voiceNum, *rest = vEnd;
+    int                 n = 0;
+
+    for (; v != vEnd; v++)
+    {
+        if (v->playingPreset == -1)
+            continue;
+
+        if (n == SF2SPU_MAX_VOICES)
+        {
+            rest = v;   /* the ones that don't fit: on the PPU, after */
+            break;
+        }
+
+        sf2spu_voice *const o = &w[n++];
+        struct tsf_region const *const r = v->region;
+
+        o->pitchInputTimecents  = v->pitchInputTimecents;
+        o->pitchOutputFactor    = v->pitchOutputFactor;
+        o->sourceSamplePosition = v->sourceSamplePosition;
+        o->noteGainDB           = v->noteGainDB;
+        o->panFactorLeft        = v->panFactorLeft;
+        o->panFactorRight       = v->panFactorRight;
+        o->loopStart            = v->loopStart;
+        o->loopEnd              = v->loopEnd;
+        o->regionEnd            = r->end;
+        o->initialFilterFc      = r->initialFilterFc;
+        o->modEnvToPitch        = r->modEnvToPitch;
+        o->modEnvToFilterFc     = r->modEnvToFilterFc;
+        o->modLfoToFilterFc     = r->modLfoToFilterFc;
+        o->modLfoToVolume       = r->modLfoToVolume;
+        o->modLfoToPitch        = r->modLfoToPitch;
+        o->vibLfoToPitch        = r->vibLfoToPitch;
+        o->index                = (int32_t)(v - f->voices);
+        o->ended                = 0;
+        memcpy(&o->ampenv, &v->ampenv, sizeof(o->ampenv));
+        memcpy(&o->modenv, &v->modenv, sizeof(o->modenv));
+        memcpy(&o->lowpass, &v->lowpass, sizeof(o->lowpass));
+        memcpy(&o->modlfo, &v->modlfo, sizeof(o->modlfo));
+        memcpy(&o->viblfo, &v->viblfo, sizeof(o->viblfo));
+    }
+
+    int const floats = samples * (f->outputmode == TSF_MONO ? 1 : 2);
+
+    if (n == 0)
+    {
+        memset(buffer, 0, floats * sizeof(float));
+        return;
+    }
+
+    job->fontSamples   = (uint64_t)(uintptr_t)f->fontSamples;
+    job->numVoices     = n;
+    job->numSamples    = samples;
+    job->stereo        = (f->outputmode == TSF_STEREO_INTERLEAVED);
+    job->interp        = f->interpolatemode;
+    job->outSampleRate = f->outSampleRate;
+    job->flush         = (sf2spu_font != f->fontSamples);
+    job->effectBlock   = TSF_RENDER_EFFECTSAMPLEBLOCK;
+    sf2spu_font        = f->fontSamples;
+
+    if (PS3_SF2SPU_Run() != 0)
+    {
+        /* the voices here are as they were: render them here */
+        tsf_render_float(f, buffer, samples, 0);
+        return;
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        sf2spu_voice const *const o = &w[i];
+        struct tsf_voice *const   d = &f->voices[o->index];
+
+        if (o->ended)
+        {
+            tsf_voice_kill(d);
+            continue;
+        }
+
+        d->sourceSamplePosition = o->sourceSamplePosition;
+        memcpy(&d->ampenv, &o->ampenv, sizeof(d->ampenv));
+        memcpy(&d->modenv, &o->modenv, sizeof(d->modenv));
+        memcpy(&d->lowpass, &o->lowpass, sizeof(d->lowpass));
+        memcpy(&d->modlfo, &o->modlfo, sizeof(d->modlfo));
+        memcpy(&d->viblfo, &o->viblfo, sizeof(d->viblfo));
+    }
+
+    memcpy(buffer, PS3_SF2SPU_Out(), floats * sizeof(float));
+
+    for (v = rest; v != vEnd; v++)
+        if (v->playingPreset != -1)
+            tsf_voice_render(f, v, buffer, samples);
+}
+#define SF2_RENDER(f, buf, n) SF2_RenderSPU(f, buf, n)
+#else
+#define SF2_RENDER(f, buf, n) tsf_render_float(f, buf, n, 0)
+#endif
+
+static unsigned long long sf2_stat_last;
+static unsigned sf2_stat_calls, sf2_stat_us, sf2_stat_max;
+
+/* written here, inside the mix (the driver locked); logged by the audio
+   thread after it (driver_ps3.cpp), so the log's file I/O never runs with
+   the driver locked */
+static char         sf2_stat_msg[320];
+static volatile int sf2_stat_ready;
+
+extern "C" const char *SF2_PS3_TakeStatsMessage(void)
+{
+    if (!sf2_stat_ready)
+        return nullptr;
+
+    sf2_stat_ready = 0;
+    return sf2_stat_msg;
+}
+
+static void SF2_Stats(unsigned us)
+{
+    unsigned long long const now = PS3_Micros();
+
+    sf2_stat_calls++;
+    sf2_stat_us += us;
+    if (us > sf2_stat_max)
+        sf2_stat_max = us;
+
+    if (sf2_stat_last == 0)
+        sf2_stat_last = now;
+
+    if (now - sf2_stat_last < 10000000ull)
+        return;
+
+#ifdef PS3_SF2_SPU
+    unsigned jobs, voices, misses, waits, spu_us, spu_max;
+    PS3_SF2SPU_TakeStats(&jobs, &voices, &misses, &waits, &spu_us, &spu_max);
+    snprintf(sf2_stat_msg, sizeof(sf2_stat_msg), "[sf2] %u buffers, %u us avg, %u us max (%.1f%% of real time); SPU: %u jobs, %.1f voices, %u lines (%u waited), %u us avg, %u us max",
+            sf2_stat_calls, sf2_stat_us / sf2_stat_calls, sf2_stat_max,
+            sf2_stat_us * 100.0 / (double)(now - sf2_stat_last), jobs, jobs ? voices / (double)jobs : 0.0, misses, waits,
+            jobs ? spu_us / jobs : 0, spu_max);
+#else
+    snprintf(sf2_stat_msg, sizeof(sf2_stat_msg), "[sf2] %u buffers, %u us avg, %u us max (%.1f%% of real time, PPU)",
+            sf2_stat_calls, sf2_stat_us / sf2_stat_calls, sf2_stat_max,
+            sf2_stat_us * 100.0 / (double)(now - sf2_stat_last));
+#endif
+    sf2_stat_ready = 1;
+    sf2_stat_last = now;
+    sf2_stat_calls = sf2_stat_us = sf2_stat_max = 0;
+}
+#else
+#define SF2_RENDER(f, buf, n) tsf_render_float(f, buf, n, 0)
+#endif
 static int  SF2_Volume = MIDI_MaxVolume;
 static int  ErrorCode  = SF2_Ok;
 
@@ -163,7 +354,13 @@ int SF2Drv_MIDI_StartPlayback(void)
 {
     SF2Drv_MIDI_HaltPlayback();
 
-    tsf_set_output(sf2_synth, MV_Channels == 1 ? TSF_MONO : TSF_STEREO_INTERLEAVED, TSF_INTERP_CUBIC, MV_MixRate, 0);
+    tsf_set_output(sf2_synth, MV_Channels == 1 ? TSF_MONO : TSF_STEREO_INTERLEAVED,
+#ifdef __PPU__
+                   TSF_INTERP_LINEAR, /* PS3: cubic costs too much for what it adds */
+#else
+                   TSF_INTERP_CUBIC,
+#endif
+                   MV_MixRate, 0);
     tsf_channel_set_bank_preset(sf2_synth, 9, 128, 0);
     tsf_reset(sf2_synth);
 
@@ -186,6 +383,9 @@ void SF2Drv_MIDI_Service(void)
     int16_t *    buffer16 = (int16_t *)MV_MusicBuffer;
     static float fbuf[MV_MIXBUFFERSIZE * 2];
     float const  fvolume = SF2_Volume * (32768.f / MIDI_MaxVolume);
+#ifdef __PPU__
+    unsigned long long const t0 = PS3_Micros();
+#endif
 
     for (int i = 0; i < MV_MIXBUFFERSIZE;)
     {
@@ -198,7 +398,7 @@ void SF2Drv_MIDI_Service(void)
 
         int samples = MV_MIDIRenderTempo > 0 ? (MV_MixRate - MV_MIDIRenderTimer + MV_MIDIRenderTempo - 1) / MV_MIDIRenderTempo : MV_MIXBUFFERSIZE;
         samples     = min(samples, MV_MIXBUFFERSIZE - i);
-        tsf_render_float(sf2_synth, fbuf, samples);
+        SF2_RENDER(sf2_synth, fbuf, samples);
 
         int const nsamples = samples * MV_Channels;
 
@@ -210,4 +410,8 @@ void SF2Drv_MIDI_Service(void)
 
         i += samples;
     }
+
+#ifdef __PPU__
+    SF2_Stats((unsigned)(PS3_Micros() - t0));
+#endif
 }

@@ -167,7 +167,7 @@ ENGINE_OBJS := \
 # The PS3 layer: talks to the engine (its headers) but calls the real C
 # library (not renamed).
 LAYER_CPP := ps3layer driver_ps3 ps3_gladfill
-LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video ps3_debug
+LAYER_C   := ps3_log ps3_stdio ps3_pad ps3_video ps3_debug ps3_sf2spu
 
 # ps3gl: OpenGL on the RSX, TyrQuakeCell's (ps3/source/gl), plus what
 # Polymost needs (ps3gl_prog.c: its GLSL program as Cg, buffer objects;
@@ -178,6 +178,27 @@ PS3GL_C   := ps3gl_main ps3gl_state ps3gl_texture ps3gl_draw ps3gl_prog ps3gl_pr
 
 LAYER_OBJS := $(patsubst %,$(OBJDIR)/ps3/%.o,$(LAYER_CPP) $(LAYER_C)) \
 	$(patsubst %,$(OBJDIR)/ps3/gl/%.o,$(PS3GL_C))
+
+# The SoundFont synth's voices on an SPU (ps3/spu/sf2spu.c), when the
+# toolchain has spu-gcc (ps3toolchain builds it); without it, or with
+# "make SPU=0", they render on the PPU as before.
+SPU_GCC := $(PS3DEV)/spu/bin/spu-gcc
+ifeq ($(SPU),)
+SPU := $(shell test -x $(SPU_GCC) && echo 1 || echo 0)
+endif
+
+ifeq ($(SPU),1)
+LAYER_OBJS += $(OBJDIR)/spu/sf2spu_bin.o
+$(OBJDIR)/audiolib/driver_sf2.o: CXXFLAGS += -DPS3_SF2_SPU
+$(OBJDIR)/ps3/ps3_sf2spu.o: PCFLAGS += -DPS3_SF2_SPU
+endif
+
+SPUFLAGS := -O3 -ffast-math -funroll-loops -fschedule-insns -mdual-nops -Wall -I$(CURDIR)/source
+
+# The audio mixer and the SoundFont synth run all the time, in the audio
+# thread: the fastest code they can get.
+AUDIO_FAST := $(patsubst %,$(OBJDIR)/audiolib/%.o,driver_sf2 mix mixst multivoc)
+$(AUDIO_FAST): CXXFLAGS += -O3 -ffast-math
 
 # The C library calls the engine makes that go to the PS3 versions.
 REDEFINE := exit abort printf fprintf vfprintf vprintf puts putchar fputs fputc \
@@ -295,6 +316,18 @@ $(OBJDIR)/audiolib/%.o: $(ESRC)/audiolib/src/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "CXX audiolib/$*.cpp"
 	@$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OBJDIR)/spu/sf2spu.elf: $(CURDIR)/spu/sf2spu.c $(CURDIR)/source/sf2spu_wire.h
+	@mkdir -p $(dir $@)
+	@echo "SPU spu/sf2spu.c"
+	@$(SPU_GCC) $(SPUFLAGS) $< -o $@ -lm
+	@$(PS3DEV)/spu/bin/spu-strip $@
+
+$(OBJDIR)/spu/sf2spu_bin.o: $(OBJDIR)/spu/sf2spu.elf
+	@cp $< $(OBJDIR)/spu/sf2spu.bin
+	@bin2s -a 128 $(OBJDIR)/spu/sf2spu.bin | ppu-as -o $@
+
+$(OBJDIR)/ps3/ps3_sf2spu.o $(OBJDIR)/audiolib/driver_sf2.o: $(CURDIR)/source/sf2spu_wire.h
 
 $(OBJDIR)/mact/%.o: $(ESRC)/mact/src/%.cpp
 	@mkdir -p $(dir $@)
