@@ -727,6 +727,25 @@ BindRing(uint32_t off)
 			PS3GL_VERTEX_SIZE, 4, GCM_VERTEX_DATA_TYPE_U8, GCM_LOCATION_RSX);
 }
 
+int
+ps3gl_draw_fan(const ps3gl_vertex_t *v, int count)
+{
+	ps3gl_vertex_t *out;
+	uint32_t off;
+
+	if (count <= 0 || !ps3gl.ctx || !ps3gl.ring ||
+		!RingAlloc((uint32_t)count * PS3GL_VERTEX_SIZE, &out, &off))
+	{
+		return 0;
+	}
+
+	memcpy(out, v, (size_t)count * PS3GL_VERTEX_SIZE);
+	BindRing(off);
+	rsxDrawVertexArray(ps3gl.ctx, GCM_TYPE_TRIANGLE_FAN, 0, (u32)count);
+
+	return 1;
+}
+
 static int
 Prim(GLenum mode, uint32_t *prim)
 {

@@ -293,6 +293,18 @@ PS3GL_BeginFrame(void)
 	{
 		ps3gl_sample = 0;
 	}
+
+	/* once, a few frames in: what Polymost's fragment programs really get
+	   (and which version of them is right) */
+	{
+		static int tested;
+
+		if (!tested && ps3gl.frame >= 3)
+		{
+			tested = 1;
+			PS3GL_SelfTest();
+		}
+	}
 }
 
 void

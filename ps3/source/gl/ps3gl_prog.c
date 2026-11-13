@@ -26,6 +26,15 @@
  * program's code, vertex program constants are a few words in the command
  * buffer. Only the constants that changed since the last draw are sent.
  *
+ * Perspective bit: PSL1GHT's cgcomp sets bit 31 of the fourth word of
+ * every MUL / DP / DIV that reads a texture coordinate input ("perspective
+ * correction off"); Polymost's tile lookup multiplies by
+ * u_texturePosSize.zw like that, and every indexed tile came out as one
+ * texel. The programs are kept in three versions (PM_MODES): as cgcomp
+ * made them, the bit cleared everywhere, the bit set on every texture
+ * coordinate read. PS3GL_SelfTest draws probes with each, reads the
+ * result back from the render target and picks the one that is right.
+ *
  * =======================================================================
  */
 
@@ -37,6 +46,7 @@
 #include "ps3gl.h"
 #include "ps3gl_polymost_data.h"
 #include "../ps3_platform.h"
+#include "../ps3_video.h"
 
 #ifndef GL_FRAGMENT_SHADER
 #define GL_FRAGMENT_SHADER      0x8B30
@@ -93,39 +103,142 @@ static program_t programs[MAX_PROGRAMS];
 
 static rsxVertexProgram *pm_vp;
 static void *pm_vp_ucode;
-/* the result and the debug views (PS3GL_SetPolymostView) */
-static rsxFragmentProgram *pm_fp[PS3GL_POLYMOST_VIEWS];
-static void *pm_fp_ucode[PS3GL_POLYMOST_VIEWS];     /* copies in RSX memory */
-static u32 pm_fp_offset[PS3GL_POLYMOST_VIEWS];
-static int pm_view;
 
-static const char *const view_names[PS3GL_POLYMOST_VIEWS] = {
-	"normal",
-	"1: texture coordinate (red/green)",
-	"2: tile sampling coordinate (red/green), usePalette (blue)",
-	"3: texture as sampled (indexed: the index as grey)",
-	"4: palette color",
-	"5: vertex color",
-	"6: usePalette (red), useColorOnly (green), fog factor (blue)",
-	"7: shade (red), shade table index (green), palswap size (blue)",
-	"8: the tile's center texel, through the palette",
-	"9: the whole texture over the polygon, through the palette",
+/* the perspective bit (see the top): as cgcomp left it, cleared on every
+   instruction, set on every one that reads a texture coordinate */
+#define PM_MODES 3
+static const char *const mode_names[PM_MODES] = {
+	"as cgcomp made it", "bit 31 cleared everywhere", "bit 31 set on every texcoord read",
 };
+static int pm_mode = 1;     /* the views' mode; PS3GL_SelfTest may change it */
+
+/* the fragment programs (result and debug views), each in every mode */
+static rsxFragmentProgram *pm_fp[PS3GL_POLYMOST_VIEWS];
+static u32 pm_fp_offset[PS3GL_POLYMOST_VIEWS][PM_MODES];   /* copies in RSX memory */
+static int pm_fp_ok[PS3GL_POLYMOST_VIEWS][PM_MODES];
+
+/* what L3+R3 cycles through: a fragment program and its mode (-1: pm_mode) */
+typedef struct {
+	int fp, mode;
+	const char *name;
+} pm_viewdef_t;
+
+static const pm_viewdef_t pm_views[] = {
+	{ 0, -1, "normal" },
+	{ 0,  0, "normal, perspective bit as cgcomp made it (patch 14)" },
+	{ 0,  1, "normal, perspective bit cleared everywhere" },
+	{ 0,  2, "normal, perspective bit set on every texcoord read" },
+	{ 1, -1, "1: texture coordinate (red/green)" },
+	{ 2, -1, "2: tile sampling coordinate (red/green), usePalette (blue)" },
+	{ 3, -1, "3: texture as sampled (indexed: the index as grey)" },
+	{ 4, -1, "4: palette color" },
+	{ 5, -1, "5: vertex color" },
+	{ 6, -1, "6: usePalette (red), useColorOnly (green), fog factor (blue)" },
+	{ 7, -1, "7: shade (red), shade table index (green), palswap size (blue)" },
+	{ 8, -1, "8: the tile's center texel, through the palette" },
+	{ 9, -1, "9: the whole texture over the polygon, through the palette" },
+};
+#define PM_VIEWS ((int)(sizeof(pm_views) / sizeof(pm_views[0])))
+static int pm_view;
 
 int ps3gl_sample;   /* > 0: this many more draws are logged (ps3gl_draw.c) */
 
 void
 PS3GL_SetPolymostView(int view)
 {
-	pm_view = ((view % PS3GL_POLYMOST_VIEWS) + PS3GL_POLYMOST_VIEWS) % PS3GL_POLYMOST_VIEWS;
+	const pm_viewdef_t *v;
+
+	pm_view = ((view % PM_VIEWS) + PM_VIEWS) % PM_VIEWS;
+	v = &pm_views[pm_view];
 	ps3gl.active_fp = -1;   /* load the new one at the next draw */
-	PS3_Log("[gl] Polymost shader view %s", view_names[pm_view]);
+	PS3_Log("[gl] Polymost shader view %s (perspective bit: %s)", v->name,
+			mode_names[v->mode >= 0 ? v->mode : pm_mode]);
 }
 
 int
 PS3GL_PolymostView(void)
 {
 	return pm_view;
+}
+
+/* Logical instruction word i (0..3) of the fragment program code at p:
+   cgcomp stores each word with its halves swapped. */
+static u32
+FPWord(const u8 *p, int i)
+{
+	u32 v = ((u32)p[i * 4] << 24) | ((u32)p[i * 4 + 1] << 16) |
+		((u32)p[i * 4 + 2] << 8) | (u32)p[i * 4 + 3];
+
+	return (v >> 16) | (v << 16);
+}
+
+/* Applies a perspective bit mode to a copy of fragment program code.
+   Gives how many instructions read a texture coordinate. */
+static int
+PatchPerspective(u8 *code, u32 size, int mode)
+{
+	u32 pos = 0;
+	int reads = 0;
+
+	while (pos + 16 <= size)
+	{
+		u8 *p = code + pos;
+		u32 w0 = FPWord(p, 0);
+		u32 in = (w0 >> 13) & 15;
+		int i, input = 0, constant = 0;
+
+		for (i = 1; i <= 3; i++)
+		{
+			u32 type = FPWord(p, i) & 3;
+
+			input |= (type == 1);
+			constant |= (type == 2);
+		}
+
+		input = input && in >= 4 && in <= 11;   /* TEXCOORD0..7 */
+		reads += input;
+
+		/* logical bit 31 of word 3 = bit 7 of its byte 2 as stored */
+		if (mode == 1 || (mode == 2 && !input))
+		{
+			p[14] &= 0x7f;
+		}
+		else if (mode == 2)
+		{
+			p[14] |= 0x80;
+		}
+
+		if (w0 & 1)
+		{
+			break;      /* the last one */
+		}
+
+		pos += constant ? 32 : 16;  /* a constant follows the instruction */
+	}
+
+	return reads;
+}
+
+/* A copy of a fragment program's code in RSX memory, in a mode */
+static int
+LoadFPCopy(const rsxFragmentProgram *fp, int mode, u32 *offset)
+{
+	void *ucode, *copy;
+	u32 size;
+
+	rsxFragmentProgramGetUCode((rsxFragmentProgram *)fp, &ucode, &size);
+	copy = rsxMemalign(64, size);
+
+	if (!copy)
+	{
+		return 0;
+	}
+
+	memcpy(copy, ucode, size);
+	PatchPerspective((u8 *)copy, size, mode);
+	rsxAddressToOffset(copy, offset);
+
+	return 1;
 }
 
 /* the vertex program's constants m0 .. u7, as polymost_vp.vcg declares
@@ -187,22 +300,23 @@ ps3gl_prog_init(void)
 
 	for (i = 0; i < PS3GL_POLYMOST_VIEWS; i++)
 	{
-		pm_fp[i] = (rsxFragmentProgram *)polymost_fp_views[i];
-		rsxFragmentProgramGetUCode(pm_fp[i], &ucode, &size);
-		pm_fp_ucode[i] = rsxMemalign(64, size);
+		int m;
 
-		if (pm_fp_ucode[i])
+		pm_fp[i] = (rsxFragmentProgram *)polymost_fp_views[i];
+
+		for (m = 0; m < PM_MODES; m++)
 		{
-			memcpy(pm_fp_ucode[i], ucode, size);
-			rsxAddressToOffset(pm_fp_ucode[i], &pm_fp_offset[i]);
+			pm_fp_ok[i][m] = LoadFPCopy(pm_fp[i], m, &pm_fp_offset[i][m]);
 		}
 
 		if (i == 0)
 		{
+			rsxFragmentProgramGetUCode(pm_fp[0], &ucode, &size);
 			PS3_Log("[gl] Polymost programs: vertex constants %s (base %d), fragment program "
-					"%u bytes%s, %d debug views (L3+R3)",
+					"%u bytes (%d texcoord reads)%s, %d views (L3+R3)",
 					contiguous ? "in one block" : "one by one", pm_const_base, (unsigned)size,
-					pm_fp_ucode[0] ? "" : " -- NO RSX MEMORY", PS3GL_POLYMOST_VIEWS - 1);
+					PatchPerspective((u8 *)ucode, size, 0),
+					pm_fp_ok[0][0] ? "" : " -- NO RSX MEMORY", PM_VIEWS);
 		}
 	}
 }
@@ -638,11 +752,17 @@ ps3gl_prog_apply(void)
 		pm_sent_valid = 0;
 	}
 
-	if (ps3gl.active_fp != PS3GL_FP_POLYMOST + pm_view && pm_fp_ucode[pm_view])
 	{
-		rsxLoadFragmentProgramLocation(ctx, pm_fp[pm_view], pm_fp_offset[pm_view],
-				GCM_LOCATION_RSX);
-		ps3gl.active_fp = PS3GL_FP_POLYMOST + pm_view;
+		const pm_viewdef_t *v = &pm_views[pm_view];
+		int mode = v->mode >= 0 ? v->mode : pm_mode;
+		int id = PS3GL_FP_POLYMOST + v->fp * PM_MODES + mode;
+
+		if (ps3gl.active_fp != id && pm_fp_ok[v->fp][mode])
+		{
+			rsxLoadFragmentProgramLocation(ctx, pm_fp[v->fp], pm_fp_offset[v->fp][mode],
+					GCM_LOCATION_RSX);
+			ps3gl.active_fp = id;
+		}
 	}
 
 	/* matrices: (projection * modelview * u_rotMatrix), rows */
@@ -1040,4 +1160,428 @@ glGenSamplers(GLsizei n, GLuint *samplers)
 	{
 		samplers[i] = 0;
 	}
+}
+
+/* ================================================================ */
+/* Self test: what the fragment programs really get                   */
+/* ================================================================ */
+
+/*
+ * Run once, early in the first GL frames (PS3GL_BeginFrame). Draws a
+ * screen-sized quad with each probe (shaders/polymost_probe.fcg, and
+ * Polymost's debug view 2) in each perspective bit mode, three times: all
+ * vertices at w 1, all at w 4, and w 1 on the left going to w 4 on the
+ * right (a real perspective). After each draw the RSX is waited for and
+ * three pixels of the middle row (1/4, 1/2, 3/4 across) are read back.
+ * The log gets the bytes read, the bytes expected, and a verdict per
+ * mode; the first mode that is right everywhere becomes the views' mode.
+ */
+
+#define ST_PROBES   7       /* polymost_probe.fcg 1..6, Polymost's view 2 */
+#define ST_DRAWS    3
+#define ST_POINTS   3
+#define ST_TOL      3       /* bytes */
+
+static const char *const st_probe_names[ST_PROBES] = {
+	"P1 TEXCOORD1 (MOV)",
+	"P2 TEXCOORD1 * 0.5 (MUL)",
+	"P3 TEXCOORD0.xy (MOV)",
+	"P4 TEXCOORD0.xy * 0.5 (MUL)",
+	"P5 w of TEXCOORD2,3,4,7",
+	"P6 w of TEXCOORD5,6, z of TEXCOORD2,3",
+	"P7 Polymost view 2 (tile coordinate)",
+};
+
+static const float st_w[ST_DRAWS][2] = { { 1.0f, 1.0f }, { 4.0f, 4.0f }, { 1.0f, 4.0f } };
+static const char *const st_draw_names[ST_DRAWS] = { "w1", "w4", "w1..4" };
+
+static int st_res[ST_PROBES][PM_MODES][ST_DRAWS][ST_POINTS][4];
+
+static void
+StConsts(float k[PM_CONSTS][4], int tile)
+{
+	int i;
+
+	memset(k, 0, sizeof(float) * PM_CONSTS * 4);
+
+	for (i = 0; i < 4; i++)
+	{
+		k[i][i] = 1.0f;     /* m0..m3: identity, the positions are clip space */
+	}
+
+	Set4(k[4], 0.0f, 0.0f, 1.0f, 0.0f);     /* e2, e3 */
+	Set4(k[5], 0.0f, 0.0f, 0.0f, 1.0f);
+	Set4(k[6], 1.0f, 0.0f, 0.0f, 0.0f);     /* texture matrix rows */
+	Set4(k[7], 0.0f, 1.0f, 0.0f, 0.0f);
+	Set4(k[8], 0.0f, 0.0f, 0.0f, 0.0f);     /* fog off */
+
+	if (!tile)
+	{
+		/* u5.z (usePalette) 0: the vertex program doesn't swap s and t */
+		Set4(k[9],  0.80f, 0.60f, 0.40f, 0.20f);
+		Set4(k[10], 0.30f, 0.70f, 0.10f, 0.90f);
+		Set4(k[11], 0.15f, 0.35f, 0.55f, 0.75f);
+		Set4(k[12], 0.05f, 0.45f, 0.65f, 0.85f);
+		Set4(k[13], 0.25f, 0.50f, 0.00f, 0.95f);
+		Set4(k[14], 0.12f, 0.34f, 0.56f, 0.78f);
+		Set4(k[15], 0.90f, 0.80f, 0.70f, 0.60f);
+	}
+	else
+	{
+		/* a 1/8 x 1/4 tile at 1/4, 1/2, no clamping, no NPOT, no palette */
+		Set4(k[9],  0.25f, 0.50f, 0.125f, 0.25f);
+		Set4(k[10], 0.001f, 0.001f, 0.0f, 0.0f);
+		Set4(k[13], 0.0f, 0.0f, 0.0f, 0.0f);
+		Set4(k[14], 0.0f, 1.0f, 0.0f, 1.0f);
+	}
+}
+
+static float
+StClamp(float v, float lo, float hi)
+{
+	return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* What probe p should give at screen fraction s of draw d (e), and what
+   it would give if the inputs came uncorrected, divided by w (raw). */
+static void
+StExpect(int p, int d, float s, const float ka[PM_CONSTS][4], float e[4], float raw[4])
+{
+	float a = (1.0f - s) / st_w[d][0], b = s / st_w[d][1];
+	float invw = a + b, u = b / invw;
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		e[i] = raw[i] = -1.0f;
+	}
+
+	switch (p)
+	{
+		case 0:
+		case 1:
+			for (i = 0; i < 4; i++)
+			{
+				e[i] = ka[9][i] * (p == 1 ? 0.5f : 1.0f);
+				raw[i] = e[i] * invw;
+			}
+			break;
+		case 2:
+		case 3:
+		{
+			float f = (p == 3) ? 0.5f : 1.0f;
+
+			Set4(e, u * f, 0.5f * f, 0.0f, 1.0f);
+			Set4(raw, b * f, 0.5f * f * invw, 0.0f, 1.0f);
+			break;
+		}
+		case 4:
+			Set4(e, ka[10][3], ka[11][3], ka[12][3], ka[15][3]);
+			break;
+		case 5:
+			Set4(e, ka[13][3], ka[14][3], ka[10][2], ka[11][2]);
+			break;
+		default:
+			Set4(e, 0.25f + StClamp(0.125f * (u - floorf(u)), 0.001f, 0.124f),
+					0.5f + StClamp(0.25f * 0.5f, 0.001f, 0.249f), 0.0f, 1.0f);
+			break;
+	}
+}
+
+static int
+StByte(float v)
+{
+	return (int)(StClamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+}
+
+static void
+StUpload(gcmContextData *ctx, const float k[PM_CONSTS][4])
+{
+	int i;
+
+	if (pm_const_base >= 0)
+	{
+		rsxLoadVertexProgramParameterBlock(ctx, (u32)pm_const_base, PM_CONSTS, &k[0][0]);
+	}
+	else
+	{
+		for (i = 0; i < PM_CONSTS; i++)
+		{
+			if (pm_const[i])
+			{
+				rsxSetVertexProgramParameter(ctx, pm_vp, pm_const[i], k[i]);
+			}
+		}
+	}
+
+	pm_sent_valid = 0;
+}
+
+static void
+StQuad(int d)
+{
+	static const float qx[4] = { -1.0f, 1.0f, 1.0f, -1.0f };
+	static const float qy[4] = { -1.0f, -1.0f, 1.0f, 1.0f };
+	ps3gl_vertex_t v[4];
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		float w = st_w[d][qx[i] < 0.0f ? 0 : 1];
+
+		v[i].x = qx[i] * w;
+		v[i].y = qy[i] * w;
+		v[i].z = 0.5f * w;
+		v[i].w = w;
+		v[i].u0 = v[i].u1 = qx[i] < 0.0f ? 0.0f : 1.0f;
+		v[i].v0 = v[i].v1 = qy[i] < 0.0f ? 0.0f : 1.0f;
+		v[i].color = 0xffffffffu;
+	}
+
+	ps3gl_draw_fan(v, 4);
+}
+
+static void
+StLine(char *buf, size_t size, const char *head, int vals[ST_DRAWS][ST_POINTS][4])
+{
+	size_t n = (size_t)snprintf(buf, size, "%s", head);
+	int d, i;
+
+	for (d = 0; d < ST_DRAWS && n < size; d++)
+	{
+		n += (size_t)snprintf(buf + n, size - n, " | %s", st_draw_names[d]);
+
+		for (i = 0; i < ST_POINTS && n < size; i++)
+		{
+			if (vals[d][i][0] < 0)
+			{
+				n += (size_t)snprintf(buf + n, size - n, " -");
+			}
+			else
+			{
+				n += (size_t)snprintf(buf + n, size - n, " %d,%d,%d,%d", vals[d][i][0],
+						vals[d][i][1], vals[d][i][2], vals[d][i][3]);
+			}
+		}
+	}
+}
+
+void
+PS3GL_SelfTest(void)
+{
+	gcmContextData *ctx = ps3gl.ctx;
+	float ka[PM_CONSTS][4], kb[PM_CONSTS][4];
+	int exp_[ST_PROBES][ST_DRAWS][ST_POINTS][4], raw_[ST_PROBES][ST_DRAWS][ST_POINTS][4];
+	int px[ST_POINTS], ok_mode[PM_MODES], chosen = -1;
+	uint32_t *rt, rt_off, rt_pitch;
+	char line[1024];
+	__typeof__(ps3gl.rs) saved;
+	int p, m, d, i, c;
+
+	if (!ctx || !ps3gl.ring || !pm_vp || !pm_fp_ok[2][0] ||
+		PS3_Video_RenderTargetInfo(&rt_off, &rt_pitch) != 0 || !(rt = PS3_Video_Source()))
+	{
+		PS3_Log("[selftest] skipped: nothing to draw with yet");
+		return;
+	}
+
+	for (i = 0; i < ST_POINTS; i++)
+	{
+		px[i] = ps3gl.screen_w * (i + 1) / 4;
+	}
+
+	StConsts(ka, 0);
+	StConsts(kb, 1);
+
+	/* plain state: no blending, tests, culling; the whole target */
+	saved = ps3gl.rs;
+	ps3gl.rs.blend = ps3gl.rs.alpha_test = ps3gl.rs.depth_test = 0;
+	ps3gl.rs.depth_mask = ps3gl.rs.cull = ps3gl.rs.scissor = 0;
+	ps3gl.rs.stencil = ps3gl.rs.polyoffset = 0;
+	ps3gl.rs.mask_r = ps3gl.rs.mask_g = ps3gl.rs.mask_b = ps3gl.rs.mask_a = 1;
+	ps3gl.rs.vp_x = ps3gl.rs.vp_y = 0;
+	ps3gl.rs.vp_w = ps3gl.screen_w;
+	ps3gl.rs.vp_h = ps3gl.screen_h;
+	ps3gl.rs.depth_near = 0.0f;
+	ps3gl.rs.depth_far = 1.0f;
+	ps3gl.dirty = PS3GL_DIRTY_ALL;
+	ps3gl_apply_states();
+
+	rsxLoadVertexProgram(ctx, pm_vp, pm_vp_ucode);
+
+	for (p = 0; p < ST_PROBES; p++)
+	{
+		const rsxFragmentProgram *fp;
+		u32 off[PM_MODES];
+		int have = 1;
+
+		if (p < PS3GL_POLYMOST_PROBES)
+		{
+			fp = (const rsxFragmentProgram *)polymost_probes[p];
+
+			for (m = 0; m < PM_MODES; m++)
+			{
+				have &= LoadFPCopy(fp, m, &off[m]);
+			}
+		}
+		else
+		{
+			fp = pm_fp[2];
+
+			for (m = 0; m < PM_MODES; m++)
+			{
+				have &= pm_fp_ok[2][m];
+				off[m] = pm_fp_offset[2][m];
+			}
+		}
+
+		StUpload(ctx, p == ST_PROBES - 1 ? kb : ka);
+
+		for (m = 0; m < PM_MODES; m++)
+		{
+			if (have)
+			{
+				rsxLoadFragmentProgramLocation(ctx, fp, off[m], GCM_LOCATION_RSX);
+			}
+
+			for (d = 0; d < ST_DRAWS; d++)
+			{
+				if (have)
+				{
+					StQuad(d);
+					rsxSetWaitForIdle(ctx);     /* the pixels written, not only the commands read */
+					PS3_Video_Finish();
+				}
+
+				for (i = 0; i < ST_POINTS; i++)
+				{
+					uint32_t v = *(volatile const uint32_t *)((const uint8_t *)rt +
+							(size_t)(ps3gl.screen_h / 2) * rt_pitch + (size_t)px[i] * 4);
+
+					st_res[p][m][d][i][0] = have ? (int)((v >> 16) & 255) : -1;
+					st_res[p][m][d][i][1] = (int)((v >> 8) & 255);
+					st_res[p][m][d][i][2] = (int)(v & 255);
+					st_res[p][m][d][i][3] = (int)(v >> 24);
+				}
+			}
+		}
+
+		/* (the probe copies stay: a few hundred bytes, once) */
+	}
+
+	/* what was read, against what should be there */
+	PS3_Log("[selftest] Polymost fragment program inputs, read back from the render target "
+			"(%dx%d; bytes R,G,B,A at x %d %d %d of the middle row)",
+			ps3gl.screen_w, ps3gl.screen_h, px[0], px[1], px[2]);
+
+	for (m = 0; m < PM_MODES; m++)
+	{
+		ok_mode[m] = 1;
+	}
+
+	for (p = 0; p < ST_PROBES; p++)
+	{
+		int any_raw = 0;
+
+		for (d = 0; d < ST_DRAWS; d++)
+		{
+			for (i = 0; i < ST_POINTS; i++)
+			{
+				float s = ((float)px[i] + 0.5f) / (float)ps3gl.screen_w;
+				float e[4], r[4];
+
+				StExpect(p, d, s, p == ST_PROBES - 1 ? kb : ka, e, r);
+
+				for (c = 0; c < 4; c++)
+				{
+					exp_[p][d][i][c] = StByte(e[c]);
+					raw_[p][d][i][c] = r[c] < 0.0f ? -1 : StByte(r[c]);
+				}
+
+				any_raw |= (r[0] >= 0.0f);
+			}
+		}
+
+		snprintf(line, sizeof(line), "%s, expected:", st_probe_names[p]);
+		StLine(line + strlen(line), sizeof(line) - strlen(line), "", exp_[p]);
+		PS3_Log("[selftest] %s", line);
+
+		if (any_raw)
+		{
+			StLine(line, sizeof(line), "    if divided by w:", raw_[p]);
+			PS3_Log("[selftest] %s", line);
+		}
+
+		for (m = 0; m < PM_MODES; m++)
+		{
+			int bad = 0;
+
+			for (d = 0; d < ST_DRAWS; d++)
+			{
+				for (i = 0; i < ST_POINTS; i++)
+				{
+					for (c = 0; c < 4; c++)
+					{
+						int diff = st_res[p][m][d][i][c] - exp_[p][d][i][c];
+
+						if (st_res[p][m][d][i][0] < 0 || diff > ST_TOL || diff < -ST_TOL)
+						{
+							bad++;
+						}
+					}
+				}
+			}
+
+			if (bad)
+			{
+				ok_mode[m] = 0;
+			}
+
+			snprintf(line, sizeof(line), "    mode %d %s:", m, bad ? "WRONG" : "ok   ");
+			StLine(line + strlen(line), sizeof(line) - strlen(line), "", st_res[p][m]);
+			PS3_Log("[selftest] %s", line);
+		}
+	}
+
+	for (m = 0; m < PM_MODES; m++)
+	{
+		PS3_Log("[selftest] mode %d (perspective bit %s): %s", m, mode_names[m],
+				ok_mode[m] ? "RIGHT everywhere" : "wrong somewhere");
+	}
+
+	/* bit cleared first: the plain way; then set; cgcomp's last */
+	{
+		static const int order[PM_MODES] = { 1, 2, 0 };
+
+		for (i = 0; i < PM_MODES && chosen < 0; i++)
+		{
+			if (ok_mode[order[i]])
+			{
+				chosen = order[i];
+			}
+		}
+	}
+
+	if (chosen >= 0)
+	{
+		pm_mode = chosen;
+		PS3_Log("[selftest] Polymost runs with mode %d (perspective bit %s)", pm_mode,
+				mode_names[pm_mode]);
+	}
+	else
+	{
+		PS3_Log("[selftest] NO mode is right: Polymost stays with mode %d (perspective bit %s)",
+				pm_mode, mode_names[pm_mode]);
+	}
+
+	/* clean up: black target, everything to the RSX again */
+	rsxSetClearColor(ctx, 0);
+	rsxClearSurface(ctx, GCM_CLEAR_R | GCM_CLEAR_G | GCM_CLEAR_B | GCM_CLEAR_A);
+
+	ps3gl.rs = saved;
+	ps3gl.dirty = PS3GL_DIRTY_ALL;
+	ps3gl.vp_loaded = 0;
+	ps3gl.active_fp = -1;
+	ps3gl.mvp_uploaded = 0;
+	pm_sent_valid = 0;
 }

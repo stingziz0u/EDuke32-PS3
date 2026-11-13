@@ -278,6 +278,11 @@ void PS3GL_LogStats(int frames);   /* 0: only resets the counters */
 void PS3GL_SetPolymostView(int view);
 int  PS3GL_PolymostView(void);
 
+/* Draws probes with Polymost's programs, reads them back from the render
+   target and logs what the fragment programs got (ps3gl_prog.c). Once,
+   from PS3GL_BeginFrame. */
+void PS3GL_SelfTest(void);
+
 /* Culling direction check (cvar gl_ps3_cullflip). */
 void PS3GL_SetCullFlip(int flip);
 
@@ -300,6 +305,10 @@ void     ps3gl_textures_init(void);
 void     ps3gl_apply_textures(unsigned units);   /* bit i: sampler i used */
 void     ps3gl_shaders_init(void);
 void     ps3gl_apply_shader(int fp);
+
+/* ps3gl_draw.c: a triangle fan of ready vertices, with whatever programs
+   and state the RSX has (the self test). 0 if the ring is full. */
+int      ps3gl_draw_fan(const ps3gl_vertex_t *v, int count);
 
 /* ps3gl_prog.c */
 void     ps3gl_prog_init(void);

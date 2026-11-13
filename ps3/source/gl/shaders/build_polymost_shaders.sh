@@ -1,7 +1,8 @@
 #!/bin/sh
 #
 # Regenerates ../ps3gl_polymost_data.h: Polymost's GLSL shaders written in
-# Cg for the RSX (polymost_vp.vcg, polymost_fp.fcg). NOT part of the normal
+# Cg for the RSX (polymost_vp.vcg, polymost_fp.fcg) and the self test's
+# probes (polymost_probe.fcg). NOT part of the normal
 # build, the header is in the tree. Same tools as build_shaders.sh (cgc
 # 3.1 and PSL1GHT's cgcomp -a); kept apart so the TyrQuakeCell programs,
 # proven on hardware, are never rebuilt by accident.
@@ -25,6 +26,11 @@ trap 'rm -rf "$TMP"' EXIT
 for v in 0 1 2 3 4 5 6 7 8 9; do
 	"$CGC" -quiet -profile fp40 -DDEBUG_VIEW=$v -o "$TMP/polymost_fp$v.asm" polymost_fp.fcg
 	"$CGCOMP" -a -f "$TMP/polymost_fp$v.asm" "$TMP/polymost_fp$v.fpo" >/dev/null
+done
+
+for p in 1 2 3 4 5 6; do
+	"$CGC" -quiet -profile fp40 -DPROBE=$p -o "$TMP/polymost_probe$p.asm" polymost_probe.fcg
+	"$CGCOMP" -a -f "$TMP/polymost_probe$p.asm" "$TMP/polymost_probe$p.fpo" >/dev/null
 done
 
 python3 - "$TMP" <<'PYEOF'
@@ -52,6 +58,15 @@ out.append("#define PS3GL_POLYMOST_VIEWS 10")
 out.append("static const unsigned char *const polymost_fp_views[PS3GL_POLYMOST_VIEWS] = {")
 for v in range(10):
     out.append("\tpolymost_fp%d_fpo," % v)
+out.append("};")
+out.append("")
+for p in range(1, 7):
+    emit("polymost_probe%d_fpo" % p, tmp + "/polymost_probe%d.fpo" % p)
+out.append("/* the self test's probes 1..6 (polymost_probe.fcg) */")
+out.append("#define PS3GL_POLYMOST_PROBES 6")
+out.append("static const unsigned char *const polymost_probes[PS3GL_POLYMOST_PROBES] = {")
+for p in range(1, 7):
+    out.append("\tpolymost_probe%d_fpo," % p)
 out.append("};")
 out.append("")
 out.append("#endif")
