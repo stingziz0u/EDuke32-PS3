@@ -25,6 +25,8 @@
  *   6 u_usePalette (red), u_useColorOnly (green), fog factor (blue)
  *   7 shade / numShades (red), the shade table's index (green),
  *     u_palswapSize.x * 4 (blue)
+ *   8 the tile's center texel, through the palette (one color a tile)
+ *   9 the whole texture (sheet) over the polygon, through the palette
  */
 
 #ifndef DEBUG_VIEW
@@ -52,6 +54,17 @@ float4 main(
 
 #if DEBUG_VIEW == 1
     return float4(frac(tc), 0.0, 1.0);
+#elif DEBUG_VIEW == 8 || DEBUG_VIEW == 9
+    {
+# if DEBUG_VIEW == 8
+        float idx = tex2D(s_texture, tps.xy + tps.zw * 0.5).r;
+# else
+        float idx = tex2D(s_texture, frac(tc)).r;
+# endif
+        float ci = tex2D(s_palswap, float2(idx, 0.0) * psw.zw + psw.xy).r * (255.0 / 256.0) + (0.5 / 256.0);
+        float4 pc = tex2D(s_palette, float2(ci, 0.0));
+        return float4(lerp(float3(idx, idx, idx), pc.rgb, usePalette), 1.0);
+    }
 #endif
 
     /* NPOT emulation (GLSL mod(a, b) = a - b * floor(a / b)) */

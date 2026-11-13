@@ -108,6 +108,8 @@ static const char *const view_names[PS3GL_POLYMOST_VIEWS] = {
 	"5: vertex color",
 	"6: usePalette (red), useColorOnly (green), fog factor (blue)",
 	"7: shade (red), shade table index (green), palswap size (blue)",
+	"8: the tile's center texel, through the palette",
+	"9: the whole texture over the polygon, through the palette",
 };
 
 int ps3gl_sample;   /* > 0: this many more draws are logged (ps3gl_draw.c) */
@@ -697,6 +699,22 @@ ps3gl_prog_apply(void)
 				p->u[U_SHADEINTERPOLATE][0], p->u[U_NPOTEMULATION][0], p->u[U_NPOTEMULATION][1],
 				p->u[U_NPOTEMULATION][2], p->u[U_NPOTEMULATION][3], p->u[U_COLORCORRECTION][0],
 				p->u[U_COLORCORRECTION][1], p->u[U_COLORCORRECTION][2]);
+		{
+			const ps3gl_texture_t *t0 = &ps3gl.textures[ps3gl.tmu[0].tex];
+			int tx = (int)(p->u[U_TEXTUREPOSSIZE][0] * t0->width + 0.5f);
+			int ty = (int)(p->u[U_TEXTUREPOSSIZE][1] * t0->height + 0.5f);
+			int tw = (int)(p->u[U_TEXTUREPOSSIZE][2] * t0->width + 0.5f);
+			int th = (int)(p->u[U_TEXTUREPOSSIZE][3] * t0->height + 0.5f);
+
+			PS3_Log("[sample]   tile at %d,%d size %dx%d in tex %d; VRAM (R): %u %u %u %u | %u %u %u %u | "
+					"center %u",
+					tx, ty, tw, th, ps3gl.tmu[0].tex,
+					ps3gl_texel(t0, tx, ty), ps3gl_texel(t0, tx + 1, ty),
+					ps3gl_texel(t0, tx + 2, ty), ps3gl_texel(t0, tx + 3, ty),
+					ps3gl_texel(t0, tx, ty + 1), ps3gl_texel(t0, tx + 1, ty + 1),
+					ps3gl_texel(t0, tx + 2, ty + 1), ps3gl_texel(t0, tx + 3, ty + 1),
+					ps3gl_texel(t0, tx + tw / 2, ty + th / 2));
+		}
 		PS3_Log("[sample]   consts k9 %g %g %g %g k10 %g %g %g %g k11 %g %g %g %g k12 %g %g %g %g "
 				"k13 %g %g %g %g k8(fog) %g %g %g; tex rows %g %g %g %g / %g %g %g %g",
 				k[9][0], k[9][1], k[9][2], k[9][3], k[10][0], k[10][1], k[10][2], k[10][3],

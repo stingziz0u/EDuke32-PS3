@@ -377,6 +377,36 @@ glBindTexture(GLenum target, GLuint texture)
 	ps3gl.tmu[ps3gl.active_tmu].tex = (int)texture;
 }
 
+/* The red byte of texel x,y of level 0, read back from RSX memory (slow:
+   debug only). Where ps3gl's own layout puts it. */
+unsigned
+ps3gl_texel(const ps3gl_texture_t *t, int x, int y)
+{
+	uint32_t off = 0, bit = 0;
+	int lw, lh;
+
+	if (!t || !t->data || x < 0 || y < 0 || x >= t->width || y >= t->height)
+	{
+		return 999;
+	}
+
+	if (!t->swizzled)
+	{
+		return t->data[(size_t)y * t->pitch + (size_t)x * 4 + 1];
+	}
+
+	lw = Log2(t->width);
+	lh = Log2(t->height);
+
+	while (lw || lh)
+	{
+		if (lw) { off |= (uint32_t)(x & 1) << bit; x >>= 1; bit++; lw--; }
+		if (lh) { off |= (uint32_t)(y & 1) << bit; y >>= 1; bit++; lh--; }
+	}
+
+	return t->data[(size_t)off * 4 + 1];
+}
+
 GLboolean APIENTRY
 glIsTexture(GLuint texture)
 {
@@ -665,13 +695,13 @@ glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 	{
 		static int logged;
 
-		if (logged < 40 && t->width >= 1024)
+		if (logged < 60 && t->width >= 1024 && width != 256)
 		{
 			const uint8_t *px = (const uint8_t *)pixels;
 
-			PS3_Log("[gl] tilesheet %d: %dx%d at %d,%d (format 0x%x), first texels %u %u %u %u",
-					ps3gl.tmu[ps3gl.active_tmu].tex, width, height, xoffset, yoffset,
-					(unsigned)format, px[0], px[1], px[2], px[3]);
+			PS3_Log("[gl] tilesheet %d (unit %d): %dx%d at %d,%d (format 0x%x), first texels %u %u %u %u",
+					ps3gl.tmu[ps3gl.active_tmu].tex, ps3gl.active_tmu, width, height, xoffset,
+					yoffset, (unsigned)format, px[0], px[1], px[2], px[3]);
 			logged++;
 		}
 	}

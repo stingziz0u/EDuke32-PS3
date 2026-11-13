@@ -22,7 +22,7 @@ trap 'rm -rf "$TMP"' EXIT
 "$CGC" -quiet -profile vp40 -o "$TMP/polymost_vp.asm" polymost_vp.vcg
 "$CGCOMP" -a -v "$TMP/polymost_vp.asm" "$TMP/polymost_vp.vpo" >/dev/null
 
-for v in 0 1 2 3 4 5 6 7; do
+for v in 0 1 2 3 4 5 6 7 8 9; do
 	"$CGC" -quiet -profile fp40 -DDEBUG_VIEW=$v -o "$TMP/polymost_fp$v.asm" polymost_fp.fcg
 	"$CGCOMP" -a -f "$TMP/polymost_fp$v.asm" "$TMP/polymost_fp$v.fpo" >/dev/null
 done
@@ -45,12 +45,12 @@ def emit(name, path):
     out.append("};")
     out.append("")
 emit("polymost_vp_vpo", tmp + "/polymost_vp.vpo")
-for v in range(8):
+for v in range(10):
     emit("polymost_fp%d_fpo" % v, tmp + "/polymost_fp%d.fpo" % v)
-out.append("/* the result (0) and the debug views 1..7 (polymost_fp.fcg) */")
-out.append("#define PS3GL_POLYMOST_VIEWS 8")
+out.append("/* the result (0) and the debug views 1..9 (polymost_fp.fcg) */")
+out.append("#define PS3GL_POLYMOST_VIEWS 10")
 out.append("static const unsigned char *const polymost_fp_views[PS3GL_POLYMOST_VIEWS] = {")
-for v in range(8):
+for v in range(10):
     out.append("\tpolymost_fp%d_fpo," % v)
 out.append("};")
 out.append("")
