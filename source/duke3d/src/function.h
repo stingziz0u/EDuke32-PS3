@@ -101,6 +101,7 @@ enum GameFunction_t
    gamefunc_Alt_Weapon,
    gamefunc_Third_Person_View,
    gamefunc_Toggle_Crouch,
+   gamefunc_Lock_On,        // (PS3 port) hold: the view follows the nearest enemy in front
    NUMGAMEFUNCTIONS
    };
 

@@ -7551,4 +7551,5 @@ static void G_SetupGameButtons(void)
     CONTROL_DefineFlag(gamefunc_Alt_Weapon,FALSE);
     CONTROL_DefineFlag(gamefunc_Third_Person_View, FALSE);
     CONTROL_DefineFlag(gamefunc_Toggle_Crouch, FALSE);
+    CONTROL_DefineFlag(gamefunc_Lock_On, FALSE);
 }

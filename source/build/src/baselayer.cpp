@@ -900,6 +900,10 @@ int engineFPSLimit(bool const throttle)
     // game back (ps3_video.c): that is the frame pacing. A timer limiter
     // on top of it (60.000 Hz against the TV's 59.94) only makes uneven
     // frames. r_maxfps 30: a flip every second vblank.
+    // 60 (every vblank) or 30: anything else from an old config is 60
+    if (r_maxfps != 30 && r_maxfps != -1)
+        r_maxfps = -1;
+
     PS3_Video_SetLock30(r_maxfps == 30);
     (void)throttle;
     return true;

@@ -112,6 +112,7 @@ char gamefunctions[NUMGAMEFUNCTIONS][MAXGAMEFUNCLEN] =
    "Alt_Weapon",
    "Third_Person_View",
    "Toggle_Crouch",
+   "Lock_On",
    };
 
 // note: internal ordering is important, must not be changed
@@ -180,6 +181,7 @@ const char gamefunc_symbol_names[NUMGAMEFUNCTIONS][MAXGAMEFUNCLEN] =
    "gamefunc_Alt_Weapon",
    "gamefunc_Third_Person_View",
    "gamefunc_Toggle_Crouch",
+   "gamefunc_Lock_On",
    };
 
 
@@ -195,6 +197,7 @@ const int32_t keybind_order_modern[NUMGAMEFUNCTIONS] =
    gamefunc_Fire,
    gamefunc_Alt_Fire,
    gamefunc_Quick_Kick,
+   gamefunc_Lock_On,
    // interact
    gamefunc_Open,
    gamefunc_Jump,
