@@ -28,6 +28,11 @@ for v in 0 1 2 3 4 5 6 7 8 9; do
 	"$CGCOMP" -a -f "$TMP/polymost_fp$v.asm" "$TMP/polymost_fp$v.fpo" >/dev/null
 done
 
+for f in 1 2; do
+	"$CGC" -quiet -profile fp40 -DFAST=$f -o "$TMP/polymost_fast$f.asm" polymost_fp.fcg
+	"$CGCOMP" -a -f "$TMP/polymost_fast$f.asm" "$TMP/polymost_fast$f.fpo" >/dev/null
+done
+
 for p in 1 2 3 4 5 6; do
 	"$CGC" -quiet -profile fp40 -DPROBE=$p -o "$TMP/polymost_probe$p.asm" polymost_probe.fcg
 	"$CGCOMP" -a -f "$TMP/polymost_probe$p.asm" "$TMP/polymost_probe$p.fpo" >/dev/null
@@ -58,6 +63,15 @@ out.append("#define PS3GL_POLYMOST_VIEWS 10")
 out.append("static const unsigned char *const polymost_fp_views[PS3GL_POLYMOST_VIEWS] = {")
 for v in range(10):
     out.append("\tpolymost_fp%d_fpo," % v)
+out.append("};")
+out.append("")
+emit("polymost_fast1_fpo", tmp + "/polymost_fast1.fpo")
+emit("polymost_fast2_fpo", tmp + "/polymost_fast2.fpo")
+out.append("/* the result without NPOT / color correction (1), and shade interpolation (2) */")
+out.append("#define PS3GL_POLYMOST_FAST 2")
+out.append("static const unsigned char *const polymost_fast[PS3GL_POLYMOST_FAST] = {")
+out.append("\tpolymost_fast1_fpo,")
+out.append("\tpolymost_fast2_fpo,")
 out.append("};")
 out.append("")
 for p in range(1, 7):

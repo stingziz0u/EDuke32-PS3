@@ -1120,6 +1120,13 @@ static MenuEntry_t ME_RENDERERSETUP_TEXQUALITY = MAKE_MENUENTRY("GL texture qual
 
 static MenuOption_t MEO_RENDERERSETUP_PRECACHE = MAKE_MENUOPTION( &MF_Redfont, &MEOS_OffOn, &ud.config.useprecache );
 static MenuEntry_t ME_RENDERERSETUP_PRECACHE = MAKE_MENUENTRY( "Cache whole map:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_RENDERERSETUP_PRECACHE, Option );
+
+#ifdef __PPU__
+// PS3: shade interpolation costs the RSX a second shade table and palette
+// lookup per pixel (ps3gl's short fragment program without it)
+static MenuOption_t MEO_RENDERERSETUP_SHADEINTERP = MAKE_MENUOPTION(&MF_Redfont, &MEOS_OffOn, &r_shadeinterpolate);
+static MenuEntry_t ME_RENDERERSETUP_SHADEINTERP = MAKE_MENUENTRY( "Smooth shading:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_RENDERERSETUP_SHADEINTERP, Option );
+#endif
 # ifndef EDUKE32_GLES
 static char const *MEOSN_RENDERERSETUP_TEXCACHE[] = { "Off", "On", "Compr.", };
 static MenuOptionSet_t MEOS_RENDERERSETUP_TEXCACHE = MAKE_MENUOPTIONSET( MEOSN_RENDERERSETUP_TEXCACHE, NULL, 0x2 );
@@ -1175,6 +1182,9 @@ static MenuEntry_t *MEL_RENDERERSETUP[] = {
 //# endif
     //&ME_RENDERERSETUP_TEXQUALITY,
     &ME_RENDERERSETUP_PRECACHE,
+#ifdef __PPU__
+    &ME_RENDERERSETUP_SHADEINTERP,
+#endif
 # ifndef EDUKE32_GLES
     &ME_RENDERERSETUP_TEXCACHE,
 # endif

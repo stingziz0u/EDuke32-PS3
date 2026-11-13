@@ -187,7 +187,7 @@ REDEFINE_FLAGS := $(foreach s,$(REDEFINE),--redefine-sym $(s)=PS3_$(s))
 
 # The file that talks to GCM the most goes at -O1 -fno-inline: PSL1GHT's
 # syscall stubs don't survive aggressive inlining (handoff notes 4.2).
-$(OBJDIR)/ps3/ps3_video.o: PCFLAGS := $(filter-out -O2,$(PCFLAGS)) -O1 -fno-inline
+$(OBJDIR)/ps3/ps3_video.o: PCFLAGS := $(filter-out -O2,$(PCFLAGS)) -O1 -fno-inline -DUSE_OPENGL
 
 # The TOC (handoff notes 3.100): ppu-gcc 7.2 has no -mcmodel, the TOC
 # holds 64 KB and the link must not split it (--no-multi-toc: a split TOC

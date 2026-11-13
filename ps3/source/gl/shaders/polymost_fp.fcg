@@ -33,6 +33,15 @@
 #define DEBUG_VIEW 0
 #endif
 
+/* FAST (the result only, picked per draw by ps3gl_prog_apply):
+     1  no NPOT emulation (u_npotEmulation.z 0), no color correction
+        (u_colorCorrection 1 1 1): the common case, ~20 instructions less
+     2  as 1, and no shade interpolation (u_shadeInterpolate 0): one shade
+        table and one palette lookup instead of two each */
+#ifndef FAST
+#define FAST 0
+#endif
+
 float4 main(
     float4 t0   : TEXCOORD0,
     float4 tps  : TEXCOORD1,
@@ -67,12 +76,16 @@ float4 main(
     }
 #endif
 
+#if FAST
+    float2 newCoord = tc;
+#else
     /* NPOT emulation (GLSL mod(a, b) = a - b * floor(a / b)) */
     float2 coord = lerp(tc, tc.yx, usePalette);
     float rows = floor(coord.y / npot.y);
     float m = coord.y - npot.y * rows;
     coord = float2(floor(m) * npot.x + coord.x, rows + m);
     float2 newCoord = lerp(tc, lerp(coord, coord.yx, usePalette), npot.z);
+#endif
 
     float2 texCoord = lerp(frac(newCoord), saturate(newCoord), htc.zw);
     texCoord = clamp(tps.zw * texCoord, htc.xy, tps.zw - htc.xy);
@@ -110,11 +123,13 @@ float4 main(
     float shadeFrac = shade - shadeFloor;
     float colorIndex = tex2D(s_palswap, float2(color.r, shadeFloor * sh.z) * psw.zw + psw.xy).r *
         (255.0 / 256.0) + (0.5 / 256.0);
+    float4 palettedColor = tex2D(s_palette, float2(colorIndex, 0.0));
+#if FAST < 2
     float colorIndexNext = tex2D(s_palswap, psw.zw * float2(color.r, (shadeFloor + 1.0) * sh.z) + psw.xy).r *
         (255.0 / 256.0) + (0.5 / 256.0);
-    float4 palettedColor = tex2D(s_palette, float2(colorIndex, 0.0));
     float4 palettedColorNext = tex2D(s_palette, float2(colorIndexNext, 0.0));
     palettedColor.rgb = lerp(palettedColor.rgb, palettedColorNext.rgb, shadeFrac * fl.w);
+#endif
 
 #if DEBUG_VIEW == 4
     return float4(palettedColor.rgb, 1.0);
@@ -134,12 +149,14 @@ float4 main(
 
     color.a *= vcol.a;
 
+#if !FAST
     /* u_colorCorrection: saturation, contrast, then brightness (the GLSL
        matrix product written out) */
     float luma = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
     color.rgb = lerp(float3(luma, luma, luma), color.rgb, fogc.w);
     color.rgb = npot.w * color.rgb + (0.5 * (1.0 - npot.w)) * color.a;
     color.rgb = color.rgb + fl.x * color.a;
+#endif
 
     return color;
 }

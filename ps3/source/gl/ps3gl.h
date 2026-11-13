@@ -76,6 +76,7 @@
 
 /* GCM labels 0-63 are the system's. IoQuake3-PS3 uses 64-66. */
 #define PS3GL_LABEL_FRAME       68
+#define PS3GL_TS_BASE           200     /* RSX timestamp reports 200..207 */
 
 /* Frames a texture memory block waits after its last use before being
    freed or reused, on top of the fence (belt and braces). */
@@ -253,6 +254,8 @@ typedef struct {
 	/* statistics, reset by PS3GL_LogStats */
 	uint32_t    st_draws, st_verts, st_upload, st_dropped, st_copies;
 	uint32_t    st_tex_bytes;
+	uint64_t    st_gpu_ns, st_gpu_max_ns;   /* RSX time per frame (timestamps) */
+	uint32_t    st_gpu_frames;
 } ps3gl_state_t;
 
 extern ps3gl_state_t ps3gl;
@@ -277,6 +280,11 @@ void PS3GL_LogStats(int frames);   /* 0: only resets the counters */
    steps (ps3gl_prog.c, shaders/polymost_fp.fcg). */
 void PS3GL_SetPolymostView(int view);
 int  PS3GL_PolymostView(void);
+
+/* The short versions of Polymost's fragment program where a draw allows
+   (on by default; SELECT+L3 to compare). */
+void PS3GL_SetFastShaders(int on);
+int  PS3GL_FastShaders(void);
 
 /* Draws probes with Polymost's programs, reads them back from the render
    target and logs what the fragment programs got (ps3gl_prog.c). Once,

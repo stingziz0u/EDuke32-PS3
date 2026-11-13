@@ -283,6 +283,28 @@ PS3GL_BeginFrame(void)
 
 	ps3gl_process_frees();
 
+	/* The RSX's time for a frame: timestamps at its start and end (4
+	   slots; frame - 3 is done, WaitForFrame above). */
+	if (ps3gl.frame > PS3GL_RING_SEGMENTS)
+	{
+		uint32_t s = (ps3gl.frame - PS3GL_RING_SEGMENTS) % 4;
+		uint64_t t0 = gcmGetTimeStamp(PS3GL_TS_BASE + 2 * s);
+		uint64_t t1 = gcmGetTimeStamp(PS3GL_TS_BASE + 2 * s + 1);
+
+		if (t1 > t0 && t1 - t0 < 1000000000ull)
+		{
+			ps3gl.st_gpu_ns += t1 - t0;
+			ps3gl.st_gpu_frames++;
+
+			if (t1 - t0 > ps3gl.st_gpu_max_ns)
+			{
+				ps3gl.st_gpu_max_ns = t1 - t0;
+			}
+		}
+	}
+
+	rsxSetTimeStamp(ps3gl.ctx, PS3GL_TS_BASE + 2 * (ps3gl.frame % 4));
+
 	/* every 10 s (a level running at 60 fps), a few draws of the frame
 	   are logged with what the shaders get */
 	/* (ps3gl_sample > 0 logs that many draws with what the shaders get;
@@ -311,6 +333,8 @@ PS3GL_EndFrame(void)
 		return;
 	}
 
+	rsxSetTimeStamp(ps3gl.ctx, PS3GL_TS_BASE + 2 * (ps3gl.frame % 4) + 1);
+
 	/* Written by the RSX once everything before it is drawn. */
 	rsxSetWriteBackendLabel(ps3gl.ctx, PS3GL_LABEL_FRAME, ps3gl.frame);
 }
@@ -321,8 +345,10 @@ PS3GL_LogStats(int frames)
 	/* frames 0: just reset (the periodic log is off) */
 	if (frames > 0)
 	{
-		PS3_Log("[gl]   %u draws, %u verts, %u KB uploaded, %u copies per frame; "
-				"ring peak %u KB; textures %u MB%s",
+		PS3_Log("[gl]   RSX %.1f ms a frame (worst %.1f); %u draws, %u verts, %u KB uploaded, "
+				"%u copies per frame; ring peak %u KB; textures %u MB%s",
+				ps3gl.st_gpu_frames ? ps3gl.st_gpu_ns / 1e6 / ps3gl.st_gpu_frames : 0.0,
+				ps3gl.st_gpu_max_ns / 1e6,
 				(unsigned)(ps3gl.st_draws / frames), (unsigned)(ps3gl.st_verts / frames),
 				(unsigned)(ps3gl.st_upload / frames / 1024),
 				(unsigned)(ps3gl.st_copies / frames), (unsigned)(ps3gl.ring_peak / 1024),
@@ -333,6 +359,8 @@ PS3GL_LogStats(int frames)
 	ps3gl.st_draws = ps3gl.st_verts = ps3gl.st_upload = ps3gl.st_dropped = 0;
 	ps3gl.st_copies = 0;
 	ps3gl.ring_peak = 0;
+	ps3gl.st_gpu_ns = ps3gl.st_gpu_max_ns = 0;
+	ps3gl.st_gpu_frames = 0;
 }
 
 /* ================================================================ */

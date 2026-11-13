@@ -142,6 +142,26 @@ static const pm_viewdef_t pm_views[] = {
 #define PM_VIEWS ((int)(sizeof(pm_views) / sizeof(pm_views[0])))
 static int pm_view;
 
+/* the result without what the draw doesn't use (polymost_fp.fcg FAST 1/2),
+   in pm_mode; SELECT+L3 turns them off to compare */
+static u32 pm_fast_offset[PS3GL_POLYMOST_FAST];
+static int pm_fast_ok[PS3GL_POLYMOST_FAST];
+static int pm_fast_on = 1;
+
+void
+PS3GL_SetFastShaders(int on)
+{
+	pm_fast_on = on ? 1 : 0;
+	ps3gl.active_fp = -1;
+	PS3_Log("[gl] Polymost fast shaders %s", pm_fast_on ? "on" : "off");
+}
+
+int
+PS3GL_FastShaders(void)
+{
+	return pm_fast_on;
+}
+
 int ps3gl_sample;   /* > 0: this many more draws are logged (ps3gl_draw.c) */
 
 void
@@ -312,6 +332,14 @@ ps3gl_prog_init(void)
 
 		if (i == 0)
 		{
+			int f;
+
+			for (f = 0; f < PS3GL_POLYMOST_FAST; f++)
+			{
+				pm_fast_ok[f] = LoadFPCopy((const rsxFragmentProgram *)polymost_fast[f], pm_mode,
+						&pm_fast_offset[f]);
+			}
+
 			rsxFragmentProgramGetUCode(pm_fp[0], &ucode, &size);
 			PS3_Log("[gl] Polymost programs: vertex constants %s (base %d), fragment program "
 					"%u bytes (%d texcoord reads)%s, %d views (L3+R3)",
@@ -757,8 +785,35 @@ ps3gl_prog_apply(void)
 		const pm_viewdef_t *v = &pm_views[pm_view];
 		int mode = v->mode >= 0 ? v->mode : pm_mode;
 		int id = PS3GL_FP_POLYMOST + v->fp * PM_MODES + mode;
+		int fast = 0;
 
-		if (ps3gl.active_fp != id && pm_fp_ok[v->fp][mode])
+		/* the plain result, and the draw needs no NPOT emulation and no
+		   color correction: the short program (and without the second
+		   shade lookup if shade interpolation is off) */
+		if (pm_fast_on && v->fp == 0 && v->mode < 0 && p->u[U_NPOTEMULATION][2] == 0.0f &&
+			p->u[U_COLORCORRECTION][0] == 1.0f && p->u[U_COLORCORRECTION][1] == 1.0f &&
+			p->u[U_COLORCORRECTION][2] == 1.0f)
+		{
+			fast = p->u[U_SHADEINTERPOLATE][0] == 0.0f ? 2 : 1;
+
+			if (!pm_fast_ok[fast - 1])
+			{
+				fast = 0;
+			}
+		}
+
+		if (fast)
+		{
+			id = PS3GL_FP_POLYMOST + 900 + fast;
+
+			if (ps3gl.active_fp != id)
+			{
+				rsxLoadFragmentProgramLocation(ctx, (const rsxFragmentProgram *)polymost_fast[fast - 1],
+						pm_fast_offset[fast - 1], GCM_LOCATION_RSX);
+				ps3gl.active_fp = id;
+			}
+		}
+		else if (ps3gl.active_fp != id && pm_fp_ok[v->fp][mode])
 		{
 			rsxLoadFragmentProgramLocation(ctx, pm_fp[v->fp], pm_fp_offset[v->fp][mode],
 					GCM_LOCATION_RSX);
@@ -1612,7 +1667,16 @@ PS3GL_SelfTest(void)
 
 	if (chosen >= 0)
 	{
+		int f;
+
 		pm_mode = chosen;
+
+		for (f = 0; f < PS3GL_POLYMOST_FAST; f++)
+		{
+			pm_fast_ok[f] = LoadFPCopy((const rsxFragmentProgram *)polymost_fast[f], pm_mode,
+					&pm_fast_offset[f]);
+		}
+
 		PS3_Log("[selftest] Polymost runs with mode %d (perspective bit %s)", pm_mode,
 				mode_names[pm_mode]);
 	}

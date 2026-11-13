@@ -114,6 +114,8 @@ int   PS3GL_Init(int width, int height);
 void  PS3GL_BeginFrame(void);
 void  PS3GL_EndFrame(void);
 void  PS3GL_SetPolymostView(int view);
+void  PS3GL_SetFastShaders(int on);
+int   PS3GL_FastShaders(void);
 int   PS3GL_PolymostView(void);
 void *PS3GL_GetProcAddress(const char *name);
 }
@@ -838,6 +840,16 @@ static void PollPad(void)
 
         if ((bits & combo) == combo && (pressed & combo))
             PS3GL_SetPolymostView(PS3GL_PolymostView() + 1);
+    }
+#endif
+
+#ifdef USE_OPENGL
+    // SELECT+L3: Polymost's short fragment programs off / on (to compare)
+    {
+        int32_t const combo = (1 << PADBTN_BACK) | (1 << PADBTN_LEFTSTICK);
+
+        if ((bits & combo) == combo && (pressed & combo))
+            PS3GL_SetFastShaders(!PS3GL_FastShaders());
     }
 #endif
 
