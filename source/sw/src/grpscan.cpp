@@ -143,6 +143,27 @@ grpfile_t * FindGroup(uint32_t crcval)
             return grp;
     }
 
+#ifdef __PPU__
+    // PS3: an add-on asks for one version of Shadow Warrior (1.2); any
+    // full version the player has will do
+    for (struct internalgrpfile const & grptype : grpfiles)
+    {
+        if (grptype.crcval != crcval || (grptype.flags & GRP_HAS_DEPENDENCY) || (grptype.gameflags & GAMEFLAG_SHAREWARE))
+            continue;
+
+        for (grp = foundgrps; grp; grp=grp->next)
+        {
+            if (!(grp->type->flags & GRP_HAS_DEPENDENCY) && !(grp->type->gameflags & GAMEFLAG_SHAREWARE))
+            {
+                LOG_F(INFO, "%s stands in for %s", grp->filename, grptype.name);
+                return grp;
+            }
+        }
+
+        break;
+    }
+#endif
+
     return NULL;
 }
 
@@ -156,6 +177,56 @@ static struct internalgrpfile const * FindGrpInfo(uint32_t crcval, int32_t size)
 
     return NULL;
 }
+
+#ifdef __PPU__
+// PS3: what the launcher shows by its name (ps3/source/ps3_launcher.c) is
+// played by its name. Copies sold today come in more versions than the
+// checksums above (GOG's Classic Redux, CD, repacks): a file of a known
+// name and an unknown checksum is taken as that game, and an add-on goes
+// on top of whichever Shadow Warrior the player has (FindGroup).
+static struct internalgrpfile const * FindGrpInfoByCRC(uint32_t crcval)
+{
+    for (struct internalgrpfile const & grptype : grpfiles)
+        if (grptype.crcval == crcval)
+            return &grptype;
+
+    return NULL;
+}
+
+static struct internalgrpfile const * PS3_FindGrpInfo(char const *filename, uint32_t crcval, int32_t size)
+{
+    static struct { char const *name; uint32_t crcval; } const byname[] =
+    {
+        { "SW.GRP", SWREG12_CRC },
+        { "WT.GRP", SWWD_CRC },
+        { "TD.GRP", 0xACC8DCDEu },   // the Twin Dragon with nothing to rename
+    };
+
+    struct internalgrpfile const *grptype = FindGrpInfo(crcval, size);
+    char const *base = Bstrrchr(filename, '/');
+
+    base = base ? base + 1 : filename;
+
+    if (grptype)
+    {
+        LOG_F(INFO, " %s (0x%08x, %d bytes): %s", base, crcval, size, grptype->name);
+        return grptype;
+    }
+
+    for (auto const &b : byname)
+    {
+        if (!Bstrcasecmp(base, b.name) && (grptype = FindGrpInfoByCRC(b.crcval)))
+        {
+            LOG_F(WARNING, " %s (0x%08x, %d bytes): a version VoidSW doesn't list; played as %s by its name", base, crcval, size, grptype->name);
+            return grptype;
+        }
+    }
+
+    LOG_F(INFO, " %s (0x%08x, %d bytes): no game", base, crcval, size);
+    return NULL;
+}
+# define FindGrpInfo(crcval, size) PS3_FindGrpInfo(sidx->name, crcval, size)
+#endif
 
 static void ProcessGroups(BUILDVFS_FIND_REC *srch, native_t maxsize)
 {
@@ -251,6 +322,9 @@ static void ProcessGroups(BUILDVFS_FIND_REC *srch, native_t maxsize)
 
     Xfree(buf);
 }
+#ifdef __PPU__
+# undef FindGrpInfo
+#endif
 
 int ScanGroups(void)
 {

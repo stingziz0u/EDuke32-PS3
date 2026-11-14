@@ -353,6 +353,33 @@ grpfile_t * FindGroup(int32_t crcval)
             return grp;
     }
 
+#ifdef __PPU__
+    // PS3: an add-on asks for one version of its game (1.5 for the retail
+    // ones); any full version of that game the player has will do
+    int32_t const family = GAMEFLAG_DUKE|GAMEFLAG_NAM|GAMEFLAG_NAPALM|GAMEFLAG_WW2GI|GAMEFLAG_FURY;
+    grpinfo_t const *wanted = NULL;
+
+    for (grpinfo_t const *grpinfo = listgrps; grpinfo; grpinfo = grpinfo->next)
+        if (grpinfo->crcval == crcval)
+        {
+            wanted = grpinfo;
+            break;
+        }
+
+    if (wanted && !wanted->dependency && !(wanted->game & (GAMEFLAG_ADDON|GAMEFLAG_SHAREWARE)))
+    {
+        for (grp = foundgrps; grp; grp=grp->next)
+        {
+            if (!grp->type->dependency && !(grp->type->game & (GAMEFLAG_ADDON|GAMEFLAG_SHAREWARE))
+                && (grp->type->game & family) == (wanted->game & family))
+            {
+                LOG_F(INFO, "%s stands in for %s", grp->filename, wanted->name);
+                return grp;
+            }
+        }
+    }
+#endif
+
     return NULL;
 }
 
@@ -369,6 +396,60 @@ static grpinfo_t const * FindGrpInfo(int32_t crcval, int32_t size)
 
     return NULL;
 }
+
+#ifdef __PPU__
+// PS3: what the launcher shows by its name (ps3/source/ps3_launcher.c) is
+// played by its name. Copies of the retail add-ons come in more versions
+// than the checksums above (CD, archive.org, repacks): a file of a known
+// name and an unknown checksum is taken as that game, and an add-on goes
+// on top of whichever Duke the player has (FindGroup).
+static grpinfo_t const * FindGrpInfoByCRC(int32_t crcval)
+{
+    for (grpinfo_t const *grpinfo = listgrps; grpinfo; grpinfo = grpinfo->next)
+        if (grpinfo->crcval == crcval)
+            return grpinfo;
+
+    return NULL;
+}
+
+static grpinfo_t const * PS3_FindGrpInfo(char const *filename, int32_t crcval, int32_t size)
+{
+    static struct { char const *name; int32_t crcval; } const byname[] =
+    {
+        { "DUKE3D.GRP",   DUKE15_CRC },
+        { "DUKEDC.GRP",   DUKEDC_CRC },
+        { "VACATION.GRP", DUKECB_CRC },
+        { "NWINTER.GRP",  DUKENW_CRC },
+        { "NAM.GRP",      NAM_CRC },
+        { "NAPALM.GRP",   NAPALM_CRC },
+        { "WW2GI.GRP",    WW2GI_CRC },
+    };
+
+    grpinfo_t const *grptype = FindGrpInfo(crcval, size);
+    char const *base = Bstrrchr(filename, '/');
+
+    base = base ? base + 1 : filename;
+
+    if (grptype)
+    {
+        LOG_F(INFO, " %s (0x%08x, %d bytes): %s", base, crcval, size, grptype->name);
+        return grptype;
+    }
+
+    for (auto const &b : byname)
+    {
+        if (!Bstrcasecmp(base, b.name) && (grptype = FindGrpInfoByCRC(b.crcval)))
+        {
+            LOG_F(WARNING, " %s (0x%08x, %d bytes): a version EDuke32 doesn't list; played as %s by its name", base, crcval, size, grptype->name);
+            return grptype;
+        }
+    }
+
+    LOG_F(INFO, " %s (0x%08x, %d bytes): no game", base, crcval, size);
+    return NULL;
+}
+# define FindGrpInfo(crcval, size) PS3_FindGrpInfo(sidx->name, crcval, size)
+#endif
 
 static void ProcessGroups(BUILDVFS_FIND_REC *srch, native_t maxsize)
 {
@@ -464,6 +545,9 @@ static void ProcessGroups(BUILDVFS_FIND_REC *srch, native_t maxsize)
 
     Xfree(buf);
 }
+# ifdef __PPU__
+#  undef FindGrpInfo
+# endif
 #endif
 
 int32_t ScanGroups(void)
