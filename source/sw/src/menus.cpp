@@ -175,6 +175,10 @@ static SWBOOL ApplyModeSettings(void)
     newy   = validresolutions[slidersettings[sldr_videores]].ydim;
     newbpp = validbpps[slidersettings[sldr_videobpp]];
     newfs  = buttonsettings[btn_videofs];
+#ifdef __PPU__
+    newbpp = 32;   // Polymost, full screen: the only ones on the PS3
+    newfs  = 1;
+#endif
 
     if (lastx == newx && lasty == newy && lastbpp == newbpp && lastfs == newfs) return FALSE;
 
@@ -241,8 +245,13 @@ MenuItem screen_i[] =
     {DefSlider(sldr_fov, 0, "FOV"), OPT_XS,                      OPT_LINE(3), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(3), 0, m_defshade, 0, NULL, NULL, NULL},
 
-#ifndef __PPU__
-    // PS3: one display, always the same mode (848x480 scaled to the TV)
+#ifdef __PPU__
+    // PS3: always full screen on Polymost; the internal resolution (the
+    // layer's modes, up to 1280x720), which the RSX scales to the TV
+    {DefSlider(sldr_videores, 0, "Resolution"), OPT_XS,          OPT_LINE(5), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(5), 0, m_defshade, 0, NULL, NULL, NULL},
+    {DefOption(0, "Apply Settings"), OPT_XSIDE,                  OPT_LINE(7), 1, m_defshade, 0, ApplyModeSettings, NULL, NULL},
+#else
     {DefButton(btn_videofs, 0, "Fullscreen"), OPT_XS,            OPT_LINE(5), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefSlider(sldr_videobpp, 0, "Colour"), OPT_XS,              OPT_LINE(6), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(6), 0, m_defshade, 0, NULL, NULL, NULL},

@@ -7614,6 +7614,32 @@ pDisplaySprites(PLAYERp pp)
                 break;
         }
 
+#ifdef __PPU__
+        // PS3 (16:9 and anything wider than 4:3): the weapons' art reaches the
+        // edge of the 320 wide 4:3 screen it was drawn for, and stopped short
+        // of a wide one's. A weapon sprite at either edge of the 4:3 area is
+        // drawn against the screen's edge (the overlays move with it).
+        if (TEST(psp->flags, PANF_WEAPON_SPRITE) && !TEST(flags, ROTATE_SPRITE_CORNER) && picnum >= 0)
+        {
+            int const w = mulscale16(tilesiz[picnum].x, psp->scale);
+            int left = x - mulscale16(tilesiz[picnum].x / 2 + picanm[picnum].xofs, psp->scale);
+            int right = left + w;
+
+            if (TEST(flags, ROTATE_SPRITE_YFLIP))
+            {
+                // turned half a circle and flipped: mirrored around x
+                int const l = 2 * x - right;
+                right = 2 * x - left;
+                left = l;
+            }
+
+            if (right >= 318 && left > 2)
+                SET(flags, RS_ALIGN_R);
+            else if (left <= 2 && right < 318)
+                SET(flags, RS_ALIGN_L);
+        }
+#endif
+
         rotatesprite(x << 16, y << 16,
                      psp->scale, ang,
                      picnum, shade, pal,

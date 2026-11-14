@@ -608,7 +608,7 @@ glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei width,
 		{
 			ReleaseStorage(t);
 
-			t->data = (uint8_t *)rsxMemalign(128, size);
+			t->data = (uint8_t *)ps3gl_rsx_memalign(128, size);
 
 			if (!t->data)
 			{

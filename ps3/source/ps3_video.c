@@ -50,6 +50,8 @@ void PS3GL_LogStats(int frames);   /* gl/ps3gl_main.c */
 #include <rsx/gcm_sys.h>
 #include <sysutil/video.h>
 
+void *ps3gl_rsx_memalign(uint32_t align, uint32_t size);   /* gl/ps3gl_main.c */
+
 #include "ps3_platform.h"
 #include "ps3_video.h"
 #include "gl/ps3gl.h"
@@ -484,7 +486,7 @@ AllocSource(int w, int h, u32 pitch, int with_depth)
 
 	for (i = 0; i < FB_COUNT; i++)
 	{
-		src[i] = (u32 *)rsxMemalign(FB_ALIGN, pitch * h);
+		src[i] = (u32 *)ps3gl_rsx_memalign(FB_ALIGN, pitch * h);
 
 		if (!src[i])
 		{
@@ -500,7 +502,7 @@ AllocSource(int w, int h, u32 pitch, int with_depth)
 	if (with_depth)
 	{
 		depth_pitch = pitch;   /* Z24S8: 4 bytes per pixel too */
-		depth = (u32 *)rsxMemalign(FB_ALIGN, depth_pitch * h);
+		depth = (u32 *)ps3gl_rsx_memalign(FB_ALIGN, depth_pitch * h);
 
 		if (!depth)
 		{

@@ -732,10 +732,7 @@ int32_t CONFIG_ReadSetup(void)
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenBPP", &ud_setup.ScreenBPP);
     if (ud_setup.ScreenBPP < 8) ud_setup.ScreenBPP = 8;
 #ifdef __PPU__
-    // PS3: one mode (the menu no longer offers others): 848x480 on Polymost,
-    // scaled to the TV
-    ud_setup.ScreenWidth = 848;
-    ud_setup.ScreenHeight = 480;
+    // PS3: Polymost, full screen (the resolution is the player's)
     ud_setup.ScreenBPP = 32;
     ud_setup.ScreenMode = 1;
 #endif

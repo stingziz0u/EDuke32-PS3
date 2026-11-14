@@ -100,6 +100,36 @@ ps3gl_process_frees(void)
 	}
 }
 
+/* RSX memory, with a second try: what's waiting to be freed (textures
+   Polymost dropped, a render target of the resolution before) only goes
+   once frames are drawn after it, and a mode change or a level load
+   allocates before any is. Out of memory: wait for the RSX to finish
+   everything, free all of it, and try again. */
+void *
+ps3gl_rsx_memalign(uint32_t align, uint32_t size)
+{
+	void *p = rsxMemalign(align, size);
+	int i;
+
+	if (p || !npending)
+	{
+		return p;
+	}
+
+	PS3_Video_Finish();
+
+	for (i = 0; i < npending; i++)
+	{
+		rsxFree(pending[i].data);
+	}
+
+	PS3_Log("[gl] out of RSX memory for %u KB: freed %d buffers the RSX was done with",
+			(unsigned)(size >> 10), npending);
+	npending = 0;
+
+	return rsxMemalign(align, size);
+}
+
 static void
 WaitForFrame(uint32_t frame)
 {

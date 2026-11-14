@@ -304,6 +304,7 @@ uint32_t ps3gl_completed_frame(void);
 int      ps3gl_cull_flip(void);
 void     ps3gl_defer_free(void *data, uint32_t last_frame);
 void     ps3gl_process_frees(void);
+void    *ps3gl_rsx_memalign(uint32_t align, uint32_t size);
 
 void     ps3gl_states_reset(void);
 void     ps3gl_apply_states(void);
