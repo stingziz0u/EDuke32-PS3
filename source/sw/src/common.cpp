@@ -374,6 +374,18 @@ void SW_CleanupSearchPaths()
 
 static inline void SW_AddMusicFolder()
 {
+#ifdef __PPU__
+    // PS3: the CD tracks (Track02.ogg...: GOG's Classic Redux brings them
+    // in a folder of their own) in USRDIR/music, as the PKG makes it, or in
+    // addons/music; ps3_stdio finds them in any case (MUSIC, Music...)
+    static char const *const dirs[] = { "music", "addons/music" };
+
+    for (char const *dir : dirs)
+        if (addsearchpath(dir) == 0)
+            LOG_F(INFO, "Music from %s", dir);
+
+    return;
+#endif
 #ifndef _WIN32
     if (addsearchpath("MUSIC") == 0)
         return;

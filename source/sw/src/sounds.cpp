@@ -517,6 +517,9 @@ PlaySong(char *song_file_name, int cdaudio_track, SWBOOL loop, SWBOOL restart)
                                                 gs.MusicVolume, gs.MusicVolume, gs.MusicVolume, FX_MUSIC_PRIORITY, fix16_one, MUSIC_ID);
                         if (SongVoice > FX_Ok)
                         {
+#ifdef __PPU__
+                            LOG_F(INFO, "Music: %s", waveformtrack);
+#endif
                             SongType = SongTypeWave;
                             SongTrack = cdaudio_track;
                             Xfree(SongName);

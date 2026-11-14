@@ -455,6 +455,9 @@ open('$(ICON0)','wb').write(b'\x89PNG\r\n\x1a\n'+png(b'IHDR',struct.pack('>IIBBB
 # the game itself, if wanted) instead of USRDIR, each in a folder of its
 # own if wanted (ps3_launcher.c).
 PKG_DIRS := USRDIR/addons
+ifeq ($(GAME),sw)
+PKG_DIRS += USRDIR/music
+endif
 
 pkgdirs:
 	@for d in $(PKG_DIRS); do mkdir -p "$(PKGFILES)/$$d"; done

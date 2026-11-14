@@ -2275,6 +2275,14 @@ drawscreen(PLAYERp pp)
     if (videoGetRenderMode() >= REND_POLYMOST)
         RedrawScreen = TRUE;
 
+#ifdef __PPU__
+    // PS3: Polymost doesn't clear the screen, and what it leaves undrawn
+    // shows the frames before (three buffers): looking up past Duke's
+    // limit (SW's horizon goes to 299) left a ghost of them over the sky
+    if (videoGetRenderMode() >= REND_POLYMOST)
+        videoClearViewableArea(0L);
+#endif
+
     DrawScreen = TRUE;
     PreDraw();
     // part of new border refresh method

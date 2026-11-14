@@ -4525,7 +4525,11 @@ void MNU_DoMenu(CTLType UNUSED(type))
         MNU_DoSlider(1, &currentmenu->items[currentmenu->cursor], FALSE);
         resetitem = TRUE;
     }
-    else if (mnu_input.button1 || BUTTON(gamefunc_Show_Menu))
+    else if (mnu_input.button1 || BUTTON(gamefunc_Show_Menu)
+#ifdef __PPU__
+             || mnu_input.b_escape   // START, as in EDuke32
+#endif
+            )
     {
         static int handle3;
         CONTROL_ClearButton(gamefunc_Show_Menu);
@@ -4572,6 +4576,17 @@ MNU_CheckForMenus(void)
     }
     else
     {
+#ifdef __PPU__
+        // PS3: START opens the menu, as in EDuke32 (SW only looked at the
+        // Esc key); held, it doesn't close it again (mact's latch)
+        UserInput start = {};
+        CONTROL_GetUserInput(&start);
+        if (start.b_escape && dimensionmode == 3 && !ConPanel)
+        {
+            CONTROL_ClearUserInput(&start);
+            KEY_PRESSED(KEYSC_ESC) = 1;
+        }
+#endif
         if ((KEY_PRESSED(KEYSC_ESC) || BUTTON(gamefunc_Show_Menu)) && dimensionmode == 3 && !ConPanel)
         {
             KEY_PRESSED(KEYSC_ESC) = 0;

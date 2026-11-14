@@ -275,6 +275,13 @@ static void CONFIG_SetJoystickAnalogAxisDeadSaturate(int i, int dead, int satura
 }
 
 
+#ifdef __PPU__
+// PS3: the left stick all the way = the keys' speed. mact gives a stick
+// 0.2 * scale/24576 of its travel: VoidSW's default scale (65536) left Lo
+// Wang at about half his walking and running speed on the pad.
+# define PS3_STICKSCALE (5 * 24576)
+#endif
+
 static void CONFIG_SetGameControllerAxesModern()
 {
     static GameControllerAnalogAxisSetting const analogAxes[] =
@@ -287,6 +294,10 @@ static void CONFIG_SetGameControllerAxesModern()
 
     CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_RIGHTX, DEFAULTAXISSCALE);
     CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_RIGHTY, DEFAULTAXISSCALE);
+#ifdef __PPU__
+    CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_LEFTX, PS3_STICKSCALE);
+    CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_LEFTY, PS3_STICKSCALE);
+#endif
 
     for (auto const & analogAxis : analogAxes)
         analogAxis.apply();
@@ -624,7 +635,12 @@ void CONFIG_SetupJoystick(void)
     char temp[80];
     int32_t scale;
 
+#ifdef __PPU__
+    // PS3: with no sw.cfg yet the defaults still go to mact (below)
+    if (scripthandle < 0) goto apply;
+#else
     if (scripthandle < 0) return;
+#endif
 
     for (i=0; i<MAXJOYBUTTONS; i++)
     {
@@ -668,6 +684,20 @@ void CONFIG_SetupJoystick(void)
         JoystickAnalogSaturate[i] = scale;
     }
 
+#ifdef __PPU__
+    {
+        // once, over a sw.cfg of the builds before: the stick's speed and
+        // START for the menu
+        int32_t ps3pad = 0;
+        if (SCRIPT_GetNumber(scripthandle, "Controls", "PS3Pad", &ps3pad) || ps3pad < 1)
+        {
+            JoystickAnalogScale[CONTROLLER_AXIS_LEFTX] = PS3_STICKSCALE;
+            JoystickAnalogScale[CONTROLLER_AXIS_LEFTY] = PS3_STICKSCALE;
+        }
+    }
+
+apply:
+#endif
     for (i=0; i<MAXJOYBUTTONS; i++)
     {
         CONTROL_MapButton(JoystickButtons[i], i, FALSE, controldevice_joystick);
@@ -839,6 +869,9 @@ void CONFIG_WriteSetup(void)
 
     SCRIPT_PutNumber(scripthandle, "Controls","UseMouse",ud_setup.UseMouse,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Controls","UseJoystick",ud_setup.UseJoystick,FALSE,FALSE);
+#ifdef __PPU__
+    SCRIPT_PutNumber(scripthandle, "Controls","PS3Pad",1,FALSE,FALSE);
+#endif
     SCRIPT_PutNumber(scripthandle, "Controls","MouseSensitivity",gs.MouseSpeed,FALSE,FALSE);
 
     SCRIPT_PutString(scripthandle, "Comm Setup", "PlayerName", CommPlayerName);
