@@ -90,6 +90,7 @@ const char *gamefunctions[] =
     "Alt_Weapon_Mode",
     "Quick_Save",
     "Quick_Load",
+    "Lock_On",
 };
 
 static const char *keydefaults[] =

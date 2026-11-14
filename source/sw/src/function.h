@@ -93,6 +93,7 @@ enum
     gamefunc_Alt_Weapon_Mode,
     gamefunc_Quick_Save,
     gamefunc_Quick_Load,
+    gamefunc_Lock_On,        // (PS3 port, as EDuke32-PS3's) hold: the view follows the nearest enemy in front
     NUMGAMEFUNCTIONS,
 };
 #endif

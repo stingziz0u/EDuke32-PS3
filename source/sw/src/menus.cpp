@@ -337,6 +337,9 @@ static SWBOOL MNU_SetJoystickAxisFunctions(MenuItem_p item);
 static SWBOOL MNU_JoystickAxisPostProcess(MenuItem_p item);
 static SWBOOL MNU_JoystickAxisSetupCustom(UserCall call, MenuItem_p item);
 static SWBOOL MNU_JoystickAxisNextPage(void);
+#ifdef __PPU__
+static SWBOOL MNU_JoystickAxisPrevPage(void);
+#endif
 MenuGroup joyaxesgroup = {0, 0, NULL, NULL, 0, 0, m_defshade, MNU_JoystickAxisSetupCustom, NULL, 0};
 MenuItem joyaxes_i[] =
 {
@@ -357,7 +360,12 @@ MenuItem joyaxes_i[] =
     {DefSlider(sldr_joyaxissatur, 0, "Saturate"),       OPT_XS, OPT_LINE(9), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL),                              OPT_XSIDE, OPT_LINE(9), 0, m_defshade, 0, NULL, NULL, NULL},
 
+#ifdef __PPU__
+    // PS3: the page with the axis' name (line 0); previous and next
+    {DefOption(0, "Previous..."),                       OPT_XS, OPT_LINE(11), 1, m_defshade, 0, MNU_JoystickAxisPrevPage, NULL, NULL},
+#else
     {DefInert(0, JoystickAxisPageName),                 OPT_XS, OPT_LINE(11), 1, m_defshade, 0, NULL, NULL, NULL},
+#endif
     {DefOption(0, "Next..."),                        OPT_XSIDE, OPT_LINE(11), 1, m_defshade, 0, MNU_JoystickAxisNextPage, NULL, NULL},
 
     {DefNone},
@@ -1459,7 +1467,11 @@ static SWBOOL MNU_JoystickAxesInitialise(MenuItem_p UNUSED(mitem))
         JoystickAxisPage = 0;
     }
 
+#ifdef __PPU__
+    snprintf(JoystickAxisName, sizeof(JoystickAxisName), "%s  (%d/%d)", joyGetName(0, JoystickAxisPage), JoystickAxisPage+1, joystick.numAxes);
+#else
     strcpy(JoystickAxisName, joyGetName(0, JoystickAxisPage));
+#endif
     sprintf(JoystickAxisPageName, "Page %d / %d", JoystickAxisPage+1, joystick.numAxes);
     slidersettings[sldr_joyaxisanalog] = MNU_ControlAxisOffset(JoystickAnalogAxes[JoystickAxisPage]);
     slidersettings[sldr_joyaxisscale] = JoystickAnalogScale[JoystickAxisPage] >> 13;
@@ -1524,9 +1536,26 @@ static SWBOOL MNU_JoystickAxisSetupCustom(UserCall call, MenuItem *item)
     return TRUE;
 }
 
+#ifdef __PPU__
+// PS3: every axis the pad has (the page count said 6 and Next cycled 4:
+// L2 and R2 out of reach)
+static SWBOOL MNU_JoystickAxisPrevPage(void)
+{
+    JoystickAxisPage = (JoystickAxisPage + joystick.numAxes - 1) % max(1, joystick.numAxes);
+    joyaxessetupgroup.cursor = 1;
+    MNU_ItemPreProcess(&joyaxessetupgroup);
+    MNU_JoystickAxesInitialise(NULL);
+    return TRUE;
+}
+#endif
+
 static SWBOOL MNU_JoystickAxisNextPage(void)
 {
+#ifdef __PPU__
+    JoystickAxisPage = (JoystickAxisPage + 1) % max(1, joystick.numAxes);
+#else
     JoystickAxisPage = (JoystickAxisPage + 1) % MNU_ControlAxisOffset(analog_maxtype);
+#endif
     joyaxessetupgroup.cursor = 1;
     MNU_ItemPreProcess(&joyaxessetupgroup);
     MNU_JoystickAxesInitialise(NULL);
@@ -4612,6 +4641,13 @@ void MNU_DoMenu(CTLType UNUSED(type))
         if (!FX_SoundValidAndActive(handle5))
             handle5 = PlaySound(DIGI_SWORDSWOOSH,&zero,&zero,&zero,v3df_dontpan);
         KB_ClearKeysDown();
+#ifdef __PPU__
+        // PS3: the Cross that picked the item counts once. Unlatched, a
+        // screen opening on it (a button's function list, a dialog) saw it
+        // still down that same frame and took it: the list closed at once
+        // with the function there was, and buttons couldn't be changed.
+        CONTROL_ClearUserInput(&mnu_input);
+#endif
         MNU_DoItem();
         resetitem = TRUE;
     }

@@ -814,6 +814,13 @@ void AnimateCacheCursor(void)
 
 void COVERsetbrightness(int bright, unsigned char *pal)
 {
+#ifdef __PPU__
+    // PS3: on Polymost the engine leaves the palette alone (gammabrightness)
+    // and brightens in the shader: SW's Brightness (0-7) as its gamma,
+    // which videoSetPalette passes on (videoSetGamma)
+    if (videoGetRenderMode() >= REND_POLYMOST)
+        g_videoGamma = DEFAULT_GAMMA + bright * 0.05f;
+#endif
     paletteSetColorTable(BASEPAL, pal);
     videoSetPalette(bright, BASEPAL, 0);
 }
@@ -4904,6 +4911,107 @@ short MirrorDelay;
 double elapsedInputTicks;
 double scaleAdjustmentToInterval(double x) { return x * (120 / synctics) / (1000.0 / elapsedInputTicks); }
 
+#ifdef __PPU__
+// Lock-on (gamefunc_Lock_On, held; the PS3 port's, as EDuke32-PS3's
+// P_LockOn): the view turns to the nearest enemy in front that can be
+// seen, and stays on it while the button is held and the enemy lives.
+// Moving and strafing stay free (circling a target).
+static int PS3_LockOnTarget(PLAYERp pp, int const currentTarget)
+{
+    int     bestSprite = -1;
+    int64_t bestScore  = INT64_MAX;
+    int const viewAng  = fix16_to_int(pp->camq16ang);
+    int i, nexti;
+
+    TRAVERSE_SPRITE_STAT(headspritestat[STAT_ENEMY], i, nexti)
+    {
+        SPRITEp const sp = &sprite[i];
+        USERp const u = User[i];
+
+        if (!u || u->Health <= 0 || i == pp->PlayerSprite || (sp->cstat & CSTAT_SPRITE_INVISIBLE))
+            continue;
+
+        int const dx   = sp->x - pp->posx;
+        int const dy   = sp->y - pp->posy;
+        int const dist = FindDistance2D(dx, dy);
+
+        if (dist < 128 || dist > 24576)
+            continue;
+
+        // in front: 45 degrees either way (90 for the one already locked)
+        int const angDiff = klabs(((getangle(dx, dy) - viewAng + 1024) & 2047) - 1024);
+
+        if (angDiff > (i == currentTarget ? 512 : 256))
+            continue;
+
+        if (!cansee(pp->posx, pp->posy, pp->posz, pp->cursectnum, sp->x, sp->y, SPRITEp_MID(sp), sp->sectnum))
+            continue;
+
+        int64_t score = (int64_t)angDiff * 64 + dist;
+
+        if (i == currentTarget)
+            score >>= 2;  // stays on it unless another is much better
+
+        if (score < bestScore)
+        {
+            bestScore  = score;
+            bestSprite = i;
+        }
+    }
+
+    return bestSprite;
+}
+
+static void PS3_LockOn(PLAYERp pp)
+{
+    static int      lockTarget = -1;
+    static uint64_t lastTicks;
+
+    uint64_t const now = timerGetNanoTicks();
+    double const   dt  = lastTicks ? (double)(now - lastTicks) / (double)timerGetNanoTickRate() : 0.0;
+
+    lastTicks = now;
+
+    if (!BUTTON(gamefunc_Lock_On) || TEST(pp->Flags, PF_DEAD) || pp->sop_control || pp->cursectnum < 0
+        || dimensionmode != 3 || UsingMenus || GamePaused)
+    {
+        lockTarget = -1;
+        return;
+    }
+
+    lockTarget = PS3_LockOnTarget(pp, lockTarget);
+
+    if (lockTarget < 0)
+        return;
+
+    SPRITEp const sp = &sprite[lockTarget];
+    float const dx   = (float)(sp->x - pp->posx);
+    float const dy   = (float)(sp->y - pp->posy);
+    float const dist = max(1.f, sqrtf(dx * dx + dy * dy));
+
+    // a fraction of the way each frame: there in about a tenth of a second
+    float const follow = (float)min(1.0, dt * 14.0);
+
+    // yaw, in build angle units (2048 a turn)
+    float const wantAng = atan2f(dy, dx) * (1024.f / fPI);
+    float const dAng    = fmodf(wantAng - fix16_to_float(pp->camq16ang) + 3072.f, 2048.f) - 1024.f;
+
+    pp->camq16ang = NORM_Q16ANGLE(fix16_sadd(pp->camq16ang, fix16_from_float(dAng * follow)));
+
+    // pitch: horiz 100 level, +128 = 45 degrees up; z is 16 times finer
+    // than x/y, up is negative
+    float const wantPitch = atan2f((float)(pp->posz - SPRITEp_MID(sp)) * (1.f / 16.f), dist);
+    float const wantHoriz = 100.f + 128.f * tanf(wantPitch);
+    float const dHoriz    = (wantHoriz - fix16_to_float(pp->camq16horiz)) * follow;
+
+    SET(pp->Flags, PF_LOCK_HORIZ | PF_LOOKING);   // as aiming does: no drift back to level
+    pp->q16horizbase = fix16_clamp(fix16_sadd(pp->q16horizbase, fix16_from_float(dHoriz)),
+                                   fix16_from_int(PLAYER_HORIZ_MIN), fix16_from_int(PLAYER_HORIZ_MAX));
+    pp->camq16horiz  = fix16_clamp(fix16_sadd(pp->camq16horiz, fix16_from_float(dHoriz)),
+                                   fix16_from_int(PLAYER_HORIZ_MIN), fix16_from_int(PLAYER_HORIZ_MAX));
+}
+#endif
+
 void
 getinput(SW_PACKET *loc, SWBOOL tied)
 {
@@ -5080,6 +5188,8 @@ getinput(SW_PACKET *loc, SWBOOL tied)
     // mact gives a stick 0.2 * scale/24576 of its travel: x15/8 makes the
     // menu's 1.00 the full travel (Lo Wang at his keys' speed).
     float const stick = (15.f / 8.f) / analogExtent;
+    // turning and looking: twice that (Ren's 2.00 of patch 36 as 1.00)
+    float const look = 2.f * stick;
 #endif
 
     int32_t svel = 0, vel = 0;
@@ -5098,7 +5208,7 @@ getinput(SW_PACKET *loc, SWBOOL tied)
     {
         q16angvel = fix16_div(fix16_from_int(info.mousex), fix16_from_int(32));
 #ifdef __PPU__
-        q16angvel = fix16_sadd(q16angvel, fix16_from_float(info.dyaw * stick * (turnamount << 1)));
+        q16angvel = fix16_sadd(q16angvel, fix16_from_float(info.dyaw * look * (turnamount << 1)));
 #else
         q16angvel += fix16_from_int(info.dyaw) / analogExtent * (turnamount << 1);
 #endif
@@ -5113,7 +5223,7 @@ getinput(SW_PACKET *loc, SWBOOL tied)
         q16aimvel = -q16aimvel;
 
 #ifdef __PPU__
-    q16aimvel = fix16_ssub(q16aimvel, fix16_from_float(info.dpitch * stick * turnamount));
+    q16aimvel = fix16_ssub(q16aimvel, fix16_from_float(info.dpitch * look * turnamount));
     svel -= lrintf(info.dx * stick * keymove);
     vel -= lrintf(info.dz * stick * keymove);
 #else
@@ -5202,6 +5312,9 @@ getinput(SW_PACKET *loc, SWBOOL tied)
             DoPlayerTurn(pp, &pp->camq16ang, q16angvel);
         if (TEST(pp->Flags2, PF2_INPUT_CAN_AIM))
             DoPlayerHorizon(pp, &pp->camq16horiz, q16aimvel);
+#ifdef __PPU__
+        PS3_LockOn(pp);
+#endif
         pp->oq16ang += pp->camq16ang - prevcamq16ang;
         pp->oq16horiz += pp->camq16horiz - prevcamq16horiz;
     }
