@@ -6607,7 +6607,12 @@ DoPlayerBeginDie(PLAYERp pp)
     {
         bak = GlobInfoStringTime;
         GlobInfoStringTime = 999;
+#ifdef __PPU__
+        extern const char *PS3_SW_RestartText(void);   // config.cpp
+        PutStringInfo(pp, PS3_SW_RestartText());
+#else
         PutStringInfo(pp, "Press SPACE to restart");
+#endif
         GlobInfoStringTime = bak;
     }
 

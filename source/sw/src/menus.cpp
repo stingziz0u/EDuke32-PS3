@@ -38,6 +38,15 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "jsector.h"
 #include "control.h"
 #include "menus.h"
+
+#ifdef __PPU__
+# define PS3_SW_OR(ps3, pc) (ps3)
+const char *PS3_SW_RestartText(void);   // config.cpp
+# define PS3_SW_RESTART(pc) PS3_SW_RestartText()
+#else
+# define PS3_SW_OR(ps3, pc) (pc)
+# define PS3_SW_RESTART(pc) (pc)
+#endif
 #include "sw_strs.h"
 #include "pal.h"
 #include "demo.h"
@@ -210,7 +219,9 @@ MenuGroup soundgroup = {110,5,"^Sound",sound_i,pic_optionstitl,0,m_defshade, NUL
 MenuItem parental_i[] =
 {
     {DefButton(btn_parental, 0, "Kid Mode"), OPT_XS, OPT_LINE(0), 1, m_defshade, 0, NULL, NULL, NULL},
+#ifndef __PPU__   // typed on a keyboard
     {DefOption(KEYSC_P, "Change Password"),              OPT_XS, OPT_LINE(1), 1, m_defshade, 0, MNU_ParentalCustom, NULL, NULL},
+#endif
     {DefNone}
 };
 
@@ -230,12 +241,15 @@ MenuItem screen_i[] =
     {DefSlider(sldr_fov, 0, "FOV"), OPT_XS,                      OPT_LINE(3), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(3), 0, m_defshade, 0, NULL, NULL, NULL},
 
+#ifndef __PPU__
+    // PS3: one display, always the same mode (848x480 scaled to the TV)
     {DefButton(btn_videofs, 0, "Fullscreen"), OPT_XS,            OPT_LINE(5), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefSlider(sldr_videobpp, 0, "Colour"), OPT_XS,              OPT_LINE(6), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(6), 0, m_defshade, 0, NULL, NULL, NULL},
     {DefSlider(sldr_videores, 0, "Resolution"), OPT_XS,          OPT_LINE(7), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(7), 0, m_defshade, 0, NULL, NULL, NULL},
     {DefOption(0, "Apply Settings"), OPT_XSIDE,                  OPT_LINE(9), 1, m_defshade, 0, ApplyModeSettings, NULL, NULL},
+#endif
     {DefNone}
 };
 
@@ -303,7 +317,7 @@ MenuItem joybuttons_i[MAXJOYSTICKBUTTONPAGES][JOYSTICKITEMSPERPAGE*2+3] =    // 
     // this menu gets defined by the call to MNU_JoystickButtonsInitialise
     { {DefNone} },
 };
-MenuGroup joybuttonssetupgroup = {65, 5, "^Joystick Setup", NULL, pic_newgametitl, 0, m_defshade, NULL, NULL, 0};
+MenuGroup joybuttonssetupgroup = {65, 5, PS3_SW_OR("^Buttons", "^Joystick Setup"), NULL, pic_newgametitl, 0, m_defshade, NULL, NULL, 0};
 
 static char JoystickAxisName[64];
 static char JoystickAxisPageName[64];
@@ -339,7 +353,7 @@ MenuItem joyaxes_i[] =
 
     {DefNone},
 };
-MenuGroup joyaxessetupgroup = {65, 5, "^Joystick Axes", joyaxes_i, pic_newgametitl, 0, m_defshade, NULL, NULL, 1};
+MenuGroup joyaxessetupgroup = {65, 5, PS3_SW_OR("^Sticks", "^Joystick Axes"), joyaxes_i, pic_newgametitl, 0, m_defshade, NULL, NULL, 1};
 
 
 MenuItem advancedmouse_i[] =
@@ -363,8 +377,42 @@ MenuItem inputsetup_i[] =
     {DefOption(0, "Apply Classic Defaults"), OPT_XS,                   OPT_LINE(8),1,m_defshade,0,MNU_LoadClassicDefaults,NULL,NULL},
     {DefNone}
 };
+#ifdef __PPU__
+// PS3: the pad only. Its buttons and sticks, and back to the defaults.
+static SWBOOL MNU_PS3ResetController(void);
+MenuItem ps3_inputsetup_i[] =
+{
+    {DefLayer(0, "Buttons", &joybuttonssetupgroup),OPT_XS,OPT_LINE(0),1,m_defshade,0,NULL,MNU_JoystickCheck,MNU_JoystickButtonsInitialise},
+    {DefLayer(0, "Sticks", &joyaxessetupgroup), OPT_XS,   OPT_LINE(1),1,m_defshade,0,NULL,MNU_JoystickCheck,MNU_JoystickAxesInitialise},
+    {DefOption(0, "Reset Controller"), OPT_XS,            OPT_LINE(3),1,m_defshade,0,MNU_PS3ResetController,NULL,NULL},
+    {DefNone}
+};
+MenuGroup inputsetupgroup = {65, 5, "^Controller", ps3_inputsetup_i, pic_newgametitl, 0, m_defshade, NULL,NULL, 0};
+#else
 MenuGroup inputsetupgroup = {65, 5, "^Input Setup", inputsetup_i, pic_newgametitl, 0, m_defshade, NULL,NULL, 0};
+#endif
 
+#ifdef __PPU__
+// PS3: no mouse; the pad's menu instead, the lines closed up
+MenuItem options_i[] =
+{
+    {DefLayer(0, "Screen Menu", &screengroup),OPT_XS,            OPT_LINE(0), 1, m_defshade,0,NULL, NULL, NULL},
+    {DefLayer(0, "Sound Menu", &soundgroup),OPT_XS,              OPT_LINE(1), 1, m_defshade,0,MNU_TryMusicInit, MNU_MusicFxCheck, NULL},
+    {DefLayer(0, "Controller", &inputsetupgroup),OPT_XS,         OPT_LINE(2), 1,m_defshade,0,NULL,NULL,NULL},
+    {DefLayer(0, "Kid Mode", &parentalgroup),OPT_XS,             OPT_LINE(3), 1, m_defshade,0,NULL, NULL, NULL},
+    {DefButton(btn_messages, 0, "Messages"), OPT_XS,             OPT_LINE(4), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_shadows, 0, "Shadows"), OPT_XS,               OPT_LINE(5), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_auto_run, 0, "Auto Run"), OPT_XS,             OPT_LINE(6), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_crosshair, 0, "Crosshair"), OPT_XS,           OPT_LINE(7), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_auto_aim, 0, "Auto-Aiming"), OPT_XS,          OPT_LINE(8), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_voxels, 0, "Voxel Sprites"), OPT_XS,          OPT_LINE(9), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_stats, 0, "Level Stats"), OPT_XS,             OPT_LINE(10), 1, m_defshade, 0, NULL, MNU_StatCheck, NULL},
+    {DefButton(btn_darts, 0, "Use Darts"), OPT_XS,               OPT_LINE(11), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_autoswitch, 0, "Equip Pickups"), OPT_XS,      OPT_LINE(12), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_interpolate_so, 0, "Interpolate SO"), OPT_XS, OPT_LINE(13), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefNone}
+};
+#else
 MenuItem options_i[] =
 {
     {DefLayer(0, "Screen Menu", &screengroup),OPT_XS,            OPT_LINE(0), 1, m_defshade,0,NULL, NULL, NULL},
@@ -387,6 +435,7 @@ MenuItem options_i[] =
     {DefButton(btn_interpolate_so, 0, "Interpolate SO"), OPT_XS,          OPT_LINE(14), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefNone}
 };
+#endif
 
 MenuGroup optiongroup = {100, 5, "^Options", options_i, pic_optionstitl, 0, m_defshade, NULL,NULL, 0};
 
@@ -531,7 +580,7 @@ short       menuarrayptr;       // Index into menuarray
 MenuGroup   *menuarray[MaxLayers], *currentmenu;
 SWBOOL UsingMenus = FALSE;
 
-#define MAXDIALOG       2       // Maximum number of dialog strings allowed
+#define MAXDIALOG       3       // Maximum number of dialog strings allowed (PS3: a line for the buttons)
 const char *dialog[MAXDIALOG];
 
 // Global menu setting values ////////////////////////////////////////////////////////////////////
@@ -948,7 +997,7 @@ SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item)
 static int MNU_SelectButtonFunction(const char *buttonname, int *currentfunc)
 {
     const int PGSIZ = 9;
-    const char *strs[] = { "Select the function to assign to", "%s", "or ESCAPE to cancel." };
+    const char *strs[] = { "Select the function to assign to", "%s", PS3_SW_OR("or CIRCLE to cancel.", "or ESCAPE to cancel.") };
     int topitem = 0, botitem = NUMGAMEFUNCTIONS;
     int i, j, y;
     short w, h=0;
@@ -1760,6 +1809,17 @@ SWBOOL MNU_LoadModernDefaults(void)
     return TRUE;
 }
 
+#ifdef __PPU__
+void SetGameControllerDefaults(void);
+
+static SWBOOL MNU_PS3ResetController(void)
+{
+    SetGameControllerDefaults();
+    PutStringInfo(Player + myconnectindex, "Controller reset");
+    return TRUE;
+}
+#endif
+
 SWBOOL MNU_LoadClassicDefaults(void)
 {
     SetDefaultKeyDefinitions(0);
@@ -1993,7 +2053,12 @@ MNU_QuickLoadCustom(UserCall call, MenuItem_p item)
         memset(dialog, 0, sizeof(dialog));
 
         dialog[0] = "Load saved game";
+#ifdef __PPU__
+        sprintf(QuickLoadDescrDialog,"\"%s\"?",SaveGameDescr[QuickLoadNum]);
+        dialog[2] = "CROSS: YES, CIRCLE: NO";
+#else
         sprintf(QuickLoadDescrDialog,"\"%s\" (Y/N)?",SaveGameDescr[QuickLoadNum]);
+#endif
         dialog[1] = QuickLoadDescrDialog;
     }
 
@@ -2010,7 +2075,11 @@ MNU_QuickLoadCustom(UserCall call, MenuItem_p item)
 
     if (ret == FALSE)
     {
-        if (KB_KeyPressed(sc_N) || KB_KeyPressed(sc_Space) || KB_KeyPressed(sc_Enter))
+        if (KB_KeyPressed(sc_N) || KB_KeyPressed(sc_Space) || KB_KeyPressed(sc_Enter)
+#ifdef __PPU__
+            || mnu_input.button1   // Circle
+#endif
+            )
         {
             cust_callback = NULL;
             if (ReloadPrompt)
@@ -2018,7 +2087,7 @@ MNU_QuickLoadCustom(UserCall call, MenuItem_p item)
                 ReloadPrompt = FALSE;
                 bak = GlobInfoStringTime;
                 GlobInfoStringTime = 999;
-                PutStringInfo(pp, "Press SPACE to restart");
+                PutStringInfo(pp, PS3_SW_RESTART("Press SPACE to restart"));
                 GlobInfoStringTime = bak;
             }
 
@@ -2788,6 +2857,14 @@ MNU_LoadSaveMove(UserCall /*call*/, MenuItem_p /*item*/)
 
         if (SavePrompt)
         {
+#ifdef __PPU__
+            // PS3: Cross overwrites, Circle doesn't
+            UserInput yn = {};
+            CONTROL_GetUserInput(&yn);
+            CONTROL_ClearUserInput(&yn);
+            if (yn.button0) KB_KeyDown[sc_Y] = 1;
+            else if (yn.button1) KB_KeyDown[sc_N] = 1;
+#endif
             if (KB_KeyPressed(sc_Y) || KB_KeyPressed(sc_Enter))
             {
                 KB_ClearKeyDown(sc_Y);
@@ -2804,6 +2881,16 @@ MNU_LoadSaveMove(UserCall /*call*/, MenuItem_p /*item*/)
                 MenuInputMode = FALSE;
             }
         }
+#ifdef __PPU__
+        // PS3: no keyboard to type the name: the level's
+        else
+        {
+            extern LEVEL_INFO LevelInfo[];
+            char const *descr = (Level >= 0 && LevelInfo[Level].Description) ? LevelInfo[Level].Description : "";
+            Bsnprintf(SaveGameDescr[game_num], sizeof(SaveGameDescr[0]), "%s", descr[0] ? descr : "Saved game");
+            GotInput = TRUE;
+        }
+#else
         else
             // get input
             switch (MNU_InputString(SaveGameDescr[game_num], 114))
@@ -2829,6 +2916,7 @@ MNU_LoadSaveMove(UserCall /*call*/, MenuItem_p /*item*/)
             case TRUE:                      // Got input
                 break;
             }
+#endif
 
         if (GotInput)
         {
@@ -2896,7 +2984,12 @@ MNU_LoadSaveDraw(UserCall UNUSED(call), MenuItem_p UNUSED(item))
         if (SavePrompt)
         {
             MNU_DrawString(SS_XSTART + SS_BORDER_SIZE + 5, SS_YSTART + SS_BORDER_SIZE + 47, "Overwrite previous", 1, 16);
+#ifdef __PPU__
+            MNU_DrawString(SS_XSTART + SS_BORDER_SIZE + 5, SS_YSTART + SS_BORDER_SIZE + 47 + 12, "  saved game?", 1, 16);
+            MNU_DrawString(SS_XSTART + SS_BORDER_SIZE + 5, SS_YSTART + SS_BORDER_SIZE + 47 + 24, "Cross yes, Circle no", 1, 16);
+#else
             MNU_DrawString(SS_XSTART + SS_BORDER_SIZE + 5, SS_YSTART + SS_BORDER_SIZE + 47 + 12, "  saved game (Y/N)", 1, 16);
+#endif
         }
     }
     else

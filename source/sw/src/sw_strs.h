@@ -25,11 +25,20 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 //-------------------------------------------------------------------------
 
 #define S_INAGAME   "YOU ARE IN A GAME!"
+#ifdef __PPU__
+#define S_PRESSKEY  "PRESS ANY BUTTON WHEN READY"
+#else
 #define S_PRESSKEY  "PRESS ANY KEY WHEN READY"
+#endif
 #define S_MESSAGEON "GAME MESSAGES ARE NOW ON"
 #define S_MESSAGEOFF "GAME MESSAGES ARE NOW OFF"
 
+#ifdef __PPU__
+// PS3: the DS3's buttons (MNU_Dialog: Cross yes, Circle no)
+#define S_QUITYN "PRESS CROSS TO QUIT, CIRCLE TO FIGHT ON."
+#else
 #define S_QUITYN "PRESS (Y) TO QUIT, (N) TO FIGHT ON."
+#endif
 #define S_QUIT1  "CONFUCIOUS SAY, 'HE WHO QUITS,"
 #define S_QUIT1A "TOTALLY SUCKS!'"
 #define S_QUIT2  "GO AHEAD, LEAVE, BUT WHILE YOU'RE"
@@ -38,8 +47,13 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #define S_QUIT3A "ONLY A LOSER COULD LET THEM DOWN."
 #define S_QUIT4  "THIS IS TOO MUCH!  NOW WHERE"
 #define S_QUIT4A "DID I PUT THOSE CHEAT CODES?"
+#ifdef __PPU__
+#define S_QUIT5  "PRESS CROSS TO RUN HOME TO MOMMY,"
+#define S_QUIT5A "CIRCLE TO BE A MAN."
+#else
 #define S_QUIT5  "PRESS (Y) TO RUN HOME TO MOMMY,"
 #define S_QUIT5A "(N) TO BE A MAN."
+#endif
 #define S_QUIT6  "YOU DO KNOW, THAT WHILE YOU'RE"
 #define S_QUIT6A "AWAY, WE'LL BE RESTOCKING MT. FUJI"
 #define S_QUIT6B "WITH A MILLION NEW MONSTERS?"

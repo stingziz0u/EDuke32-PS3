@@ -1972,6 +1972,22 @@ wfe_Esc(void)
 
     DrawMenuLevelScreen();
 
+#ifdef __PPU__
+    // PS3: START asks, Cross leaves, Circle stays
+    {
+        UserInput yn = {};
+        CONTROL_GetUserInput(&yn);
+        if (yn.b_escape || (wfe_Show && (yn.button0 || yn.button1)))
+            CONTROL_ClearUserInput(&yn);
+        if (yn.b_escape)
+            KEY_PRESSED(KEYSC_ESC) = 1;
+        else if (wfe_Show && yn.button0)
+            KEY_PRESSED(KEYSC_Y) = 1;
+        else if (wfe_Show && yn.button1)
+            KEY_PRESSED(KEYSC_N) = 1;
+    }
+#endif
+
     if (KEY_PRESSED(KEYSC_ESC))
     {
         KEY_PRESSED(KEYSC_ESC) = 0;
@@ -1980,7 +1996,11 @@ wfe_Esc(void)
 
     if (wfe_Show)
     {
+#ifdef __PPU__
+        sprintf(ds,"Lo Wang is afraid!  Exit game? Cross/Circle");
+#else
         sprintf(ds,"Lo Wang is afraid!  Exit game Y/N?");
+#endif
         MNU_MeasureString(ds, &w, &h);
         MNU_DrawString(TEXT_TEST_COL(w), 170, ds, 1, 16);
 
@@ -2505,7 +2525,11 @@ BonusScreen(void)
         MNU_DrawString(60, BONUS_LINE(line), ds,1,16);
 
 
+#ifdef __PPU__
+        sprintf(ds,"Press CROSS to continue");
+#else
         sprintf(ds,"Press SPACE to continue");
+#endif
         MNU_MeasureString(ds, &w, &h);
         MNU_DrawString(TEXT_TEST_COL(w), 185, ds,1,19);
 
@@ -5047,6 +5071,16 @@ getinput(SW_PACKET *loc, SWBOOL tied)
 
     info.dz = (info.dz * move_scale)>>8;
     info.dyaw = (info.dyaw * turn_scale)>>8;
+
+#ifdef __PPU__
+    // PS3: mact gives a stick 0.2 * scale/24576 of its travel, so at the
+    // menu's 1.00 (65536) a stick all the way gave 53%: Lo Wang at half his
+    // keys' speed. x15/8: at 1.00 the full travel, both sticks alike.
+    info.dx     = info.dx * 15 / 8;
+    info.dz     = info.dz * 15 / 8;
+    info.dyaw   = info.dyaw * 15 / 8;
+    info.dpitch = info.dpitch * 15 / 8;
+#endif
 
     int32_t svel = 0, vel = 0;
     fix16_t q16aimvel = 0, q16angvel = 0;

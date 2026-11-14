@@ -275,13 +275,6 @@ static void CONFIG_SetJoystickAnalogAxisDeadSaturate(int i, int dead, int satura
 }
 
 
-#ifdef __PPU__
-// PS3: the left stick all the way = the keys' speed. mact gives a stick
-// 0.2 * scale/24576 of its travel: VoidSW's default scale (65536) left Lo
-// Wang at about half his walking and running speed on the pad.
-# define PS3_STICKSCALE (5 * 24576)
-#endif
-
 static void CONFIG_SetGameControllerAxesModern()
 {
     static GameControllerAnalogAxisSetting const analogAxes[] =
@@ -294,10 +287,6 @@ static void CONFIG_SetGameControllerAxesModern()
 
     CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_RIGHTX, DEFAULTAXISSCALE);
     CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_RIGHTY, DEFAULTAXISSCALE);
-#ifdef __PPU__
-    CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_LEFTX, PS3_STICKSCALE);
-    CONFIG_SetJoystickAnalogAxisScale(CONTROLLER_AXIS_LEFTY, PS3_STICKSCALE);
-#endif
 
     for (auto const & analogAxis : analogAxes)
         analogAxis.apply();
@@ -686,13 +675,13 @@ void CONFIG_SetupJoystick(void)
 
 #ifdef __PPU__
     {
-        // once, over a sw.cfg of the builds before: the stick's speed and
-        // START for the menu
+        // once, over the setup of the builds before (patch 33 scaled the
+        // left stick up; the speed is in getinput now): every stick at 1.00
         int32_t ps3pad = 0;
-        if (SCRIPT_GetNumber(scripthandle, "Controls", "PS3Pad", &ps3pad) || ps3pad < 1)
+        if (SCRIPT_GetNumber(scripthandle, "Controls", "PS3Pad", &ps3pad) || ps3pad < 2)
         {
-            JoystickAnalogScale[CONTROLLER_AXIS_LEFTX] = PS3_STICKSCALE;
-            JoystickAnalogScale[CONTROLLER_AXIS_LEFTY] = PS3_STICKSCALE;
+            for (int a = CONTROLLER_AXIS_LEFTX; a <= CONTROLLER_AXIS_RIGHTY; a++)
+                JoystickAnalogScale[a] = DEFAULTAXISSCALE;
         }
     }
 
@@ -742,6 +731,14 @@ int32_t CONFIG_ReadSetup(void)
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenHeight",&ud_setup.ScreenHeight);
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenBPP", &ud_setup.ScreenBPP);
     if (ud_setup.ScreenBPP < 8) ud_setup.ScreenBPP = 8;
+#ifdef __PPU__
+    // PS3: one mode (the menu no longer offers others): 848x480 on Polymost,
+    // scaled to the TV
+    ud_setup.ScreenWidth = 848;
+    ud_setup.ScreenHeight = 480;
+    ud_setup.ScreenBPP = 32;
+    ud_setup.ScreenMode = 1;
+#endif
 
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "MaxRefreshFreq", (int32_t *)&maxrefreshfreq);
 
@@ -870,7 +867,7 @@ void CONFIG_WriteSetup(void)
     SCRIPT_PutNumber(scripthandle, "Controls","UseMouse",ud_setup.UseMouse,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Controls","UseJoystick",ud_setup.UseJoystick,FALSE,FALSE);
 #ifdef __PPU__
-    SCRIPT_PutNumber(scripthandle, "Controls","PS3Pad",1,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Controls","PS3Pad",2,FALSE,FALSE);
 #endif
     SCRIPT_PutNumber(scripthandle, "Controls","MouseSensitivity",gs.MouseSpeed,FALSE,FALSE);
 
@@ -936,3 +933,27 @@ void CONFIG_WriteSetup(void)
 
     CONFIG_WriteCvars();
 }
+
+#ifdef __PPU__
+// "Press SPACE to restart" on the PS3: the button that opens (gamefunc_Open,
+// what the restart reads), by its DS3 name
+const char *PS3_SW_RestartText(void)
+{
+    static char text[64];
+    char const *name = "Cross";
+
+    for (int i = 0; i < MAXJOYBUTTONS; i++)
+    {
+        if (JoystickButtons[i] == gamefunc_Open)
+        {
+            char const *const n = joyGetName(1, i);
+            if (n && n[0])
+                name = n;
+            break;
+        }
+    }
+
+    Bsnprintf(text, sizeof(text), "Press %s to restart", name);
+    return text;
+}
+#endif
