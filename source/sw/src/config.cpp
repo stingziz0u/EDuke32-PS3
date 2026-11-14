@@ -678,7 +678,8 @@ void CONFIG_SetupJoystick(void)
         // once, over the setup of the builds before (patch 33 scaled the
         // left stick up; the speed is in getinput now): every stick at 1.00
         int32_t ps3pad = 0;
-        if (SCRIPT_GetNumber(scripthandle, "Controls", "PS3Pad", &ps3pad) || ps3pad < 2)
+        // (and patch 38's slower look: a setup tuned to 37's goes back too)
+        if (SCRIPT_GetNumber(scripthandle, "Controls", "PS3Pad", &ps3pad) || ps3pad < 3)
         {
             for (int a = CONTROLLER_AXIS_LEFTX; a <= CONTROLLER_AXIS_RIGHTY; a++)
                 JoystickAnalogScale[a] = DEFAULTAXISSCALE;
@@ -864,7 +865,7 @@ void CONFIG_WriteSetup(void)
     SCRIPT_PutNumber(scripthandle, "Controls","UseMouse",ud_setup.UseMouse,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Controls","UseJoystick",ud_setup.UseJoystick,FALSE,FALSE);
 #ifdef __PPU__
-    SCRIPT_PutNumber(scripthandle, "Controls","PS3Pad",2,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Controls","PS3Pad",3,FALSE,FALSE);
 #endif
     SCRIPT_PutNumber(scripthandle, "Controls","MouseSensitivity",gs.MouseSpeed,FALSE,FALSE);
 

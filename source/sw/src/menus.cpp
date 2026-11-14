@@ -320,8 +320,11 @@ static SWBOOL MNU_SetJoystickButtonFunctions(MenuItem_p item);
 static SWBOOL MNU_JoystickButtonPostProcess(MenuItem_p item);
 static SWBOOL MNU_JoystickButtonSetupCustom(UserCall call, MenuItem_p item);
 static SWBOOL MNU_JoystickButtonNextPage(void);
+#ifdef __PPU__
+static SWBOOL MNU_JoystickButtonPrevPage(void);
+#endif
 MenuGroup joybuttonsgroup = {0, 0, NULL, NULL, 0, 0, m_defshade, MNU_JoystickButtonSetupCustom, NULL, 0};
-MenuItem joybuttons_i[MAXJOYSTICKBUTTONPAGES][JOYSTICKITEMSPERPAGE*2+3] =    // itemsperpage * Layer/Inert + Pagetext + Next + DefNone
+MenuItem joybuttons_i[MAXJOYSTICKBUTTONPAGES][JOYSTICKITEMSPERPAGE*2+4] =    // itemsperpage * Layer/Inert + Pagetext + (PS3: Previous) + Next + DefNone
 {
     // this menu gets defined by the call to MNU_JoystickButtonsInitialise
     { {DefNone} },
@@ -1231,6 +1234,76 @@ static SWBOOL MNU_SetMouseButtonFunctions(MenuItem_p item)
 
 static MenuItem_p joystick_button_item = NULL;
 
+#ifdef __PPU__
+// PS3: the pad's buttons, one line each. No "Double <button>" lines
+// (mact's double taps: PC joystick setup, nothing on them by default and
+// half the list); the page on a line of its own, Previous and Next.
+static int PS3_JoystickButtonPages(void)
+{
+    return max(1, (joystick.numButtons + (joystick.numHats > 0) * 4 + JOYSTICKITEMSPERPAGE - 1) / JOYSTICKITEMSPERPAGE);
+}
+
+static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p UNUSED(mitem))
+{
+    MenuItem templayer = { DefLayer(0, JoystickButtonNames[0], &joybuttonsgroup), OPT_XS, OPT_LINE(0), 1, m_defshade, 0, NULL, NULL, MNU_JoystickButtonPostProcess };
+    MenuItem tempinert = { DefInert(0, JoystickButtonFunctions[0]), OPT_XSIDE, OPT_LINE(0), 1, m_defshade, 0, NULL, MNU_SetJoystickButtonFunctions, NULL };
+    MenuItem temppagename = { DefInert(0, JoystickButtonPageName[0]), OPT_XS, OPT_LINE(JOYSTICKITEMSPERPAGE), 1, MENU_SHADE_INACTIVE, 0, NULL, NULL, NULL };
+    MenuItem tempprevpage = { DefOption(0, "Previous..."), OPT_XS, OPT_LINE(JOYSTICKITEMSPERPAGE+1), 1, m_defshade, 0, MNU_JoystickButtonPrevPage, NULL, NULL };
+    MenuItem tempnextpage = { DefOption(0, "Next..."), OPT_XSIDE, OPT_LINE(JOYSTICKITEMSPERPAGE+1), 1, m_defshade, 0, MNU_JoystickButtonNextPage, NULL, NULL };
+    MenuItem tempnone = { DefNone };
+    const char *hatdirs[] = { " Up", " Right", " Down", " Left" };
+    int const total = joystick.numButtons + (joystick.numHats > 0) * 4;
+    int const pages = PS3_JoystickButtonPages();
+    int entry, page = 0, pageitem = 0;
+
+    if (joybuttonssetupgroup.items != NULL)
+        return TRUE;
+
+    joybuttonssetupgroup.items = joybuttons_i[0];
+    MenuItem_p item = &joybuttons_i[0][0];
+
+    for (entry = 0; entry < total; entry++)
+    {
+        int dbutton = entry;
+
+        if (entry < joystick.numButtons)
+            strcpy(JoystickButtonNames[dbutton], joyGetName(1, dbutton));
+        else
+        {
+            strcpy(JoystickButtonNames[dbutton], joyGetName(2, 0));
+            strcat(JoystickButtonNames[dbutton], hatdirs[entry - joystick.numButtons]);
+        }
+
+        templayer.text = JoystickButtonNames[dbutton];
+        templayer.y = OPT_LINE(pageitem);
+        templayer.tics = dbutton;
+        memcpy(item++, &templayer, sizeof(MenuItem));
+
+        tempinert.text = JoystickButtonFunctions[dbutton];
+        tempinert.y = OPT_LINE(pageitem);
+        tempinert.tics = dbutton;
+        memcpy(item++, &tempinert, sizeof(MenuItem));
+
+        if (++pageitem == JOYSTICKITEMSPERPAGE || entry == total - 1)
+        {
+            sprintf(JoystickButtonPageName[page], "Page %d / %d", page+1, pages);
+            temppagename.text = JoystickButtonPageName[page];
+            memcpy(item++, &temppagename, sizeof(MenuItem));
+            memcpy(item++, &tempprevpage, sizeof(MenuItem));
+            memcpy(item++, &tempnextpage, sizeof(MenuItem));
+            memcpy(item, &tempnone, sizeof(MenuItem));
+
+            if (++page >= MAXJOYSTICKBUTTONPAGES)
+                break;
+
+            pageitem = 0;
+            item = &joybuttons_i[page][0];
+        }
+    }
+
+    return TRUE;
+}
+#else
 static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p UNUSED(mitem))
 {
     MenuItem_p item;
@@ -1340,6 +1413,7 @@ static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p UNUSED(mitem))
 
     return TRUE;
 }
+#endif
 
 static SWBOOL MNU_JoystickButtonPostProcess(MenuItem_p item)
 {
@@ -1411,9 +1485,24 @@ static SWBOOL MNU_JoystickButtonSetupCustom(UserCall call, MenuItem *item)
     return TRUE;
 }
 
+#ifdef __PPU__
+static SWBOOL MNU_JoystickButtonPrevPage(void)
+{
+    JoystickButtonPage = (JoystickButtonPage + PS3_JoystickButtonPages() - 1) % PS3_JoystickButtonPages();
+    joybuttonssetupgroup.items = &joybuttons_i[JoystickButtonPage][0];
+    joybuttonssetupgroup.cursor = 0;
+    MNU_ItemPreProcess(&joybuttonssetupgroup);
+    return TRUE;
+}
+#endif
+
 static SWBOOL MNU_JoystickButtonNextPage(void)
 {
+#ifdef __PPU__
+    JoystickButtonPage = (JoystickButtonPage + 1) % PS3_JoystickButtonPages();
+#else
     JoystickButtonPage = (JoystickButtonPage + 1) % (((joystick.numButtons * 2 + (joystick.numHats > 0) * 4) / JOYSTICKITEMSPERPAGE) + 1);
+#endif
     joybuttonssetupgroup.items = &joybuttons_i[JoystickButtonPage][0];
     joybuttonssetupgroup.cursor = 0;
     MNU_ItemPreProcess(&joybuttonssetupgroup);

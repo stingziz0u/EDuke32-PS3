@@ -5188,8 +5188,9 @@ getinput(SW_PACKET *loc, SWBOOL tied)
     // mact gives a stick 0.2 * scale/24576 of its travel: x15/8 makes the
     // menu's 1.00 the full travel (Lo Wang at his keys' speed).
     float const stick = (15.f / 8.f) / analogExtent;
-    // turning and looking: twice that (Ren's 2.00 of patch 36 as 1.00)
-    float const look = 2.f * stick;
+    // turning and looking: an eighth of patch 37's (0.13 there felt right
+    // for 1.00), a quarter of the moving stick's
+    float const look = stick / 4.f;
 #endif
 
     int32_t svel = 0, vel = 0;
