@@ -161,6 +161,9 @@ static unsigned fill_count, fill_us, fill_max, fill_minqueued = LEAD_BLOCKS;
 static void
 FillStats(unsigned us)
 {
+    if (!PS3_LogsEnabled())
+        return;
+
     unsigned long long const now = PS3_Micros();
 
     fill_count++;

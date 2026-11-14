@@ -845,6 +845,10 @@ static void PollPad(void)
     int32_t const pressed  = bits & ~pad_lastbits;
     int32_t const released = pad_lastbits & ~bits;
 
+    // the testing combos below only with USRDIR/logs.txt: L3+R3 and
+    // SELECT+L3/R3 are presses a player makes (run + crouch...)
+    if (PS3_LogsEnabled())
+    {
 #ifdef USE_OPENGL
     // L3+R3: the next debug view of Polymost's shader (ps3gl_prog.c)
     {
@@ -874,6 +878,7 @@ static void PollPad(void)
             ps3_pacedclock ^= 1;
             PS3_Log("[video] game clock: %s", ps3_pacedclock ? "on the vblanks" : "plain");
         }
+    }
     }
 
     joystick.bits = (joystick.bits | pressed) & ~released;
@@ -1603,7 +1608,8 @@ static void GameMain(void)
         extern int ps3_autotest;   // ps3_game_*.cpp
         // the layer calls the real fopen (not ps3_stdio.c's): no working
         // directory on lv2, the full path
-        FILE *f = fopen(PS3_USRDIR "/autotest.txt", "r");
+        // (a testing tool: with USRDIR/logs.txt too, whose log it writes to)
+        FILE *f = PS3_LogsEnabled() ? fopen(PS3_USRDIR "/autotest.txt", "r") : NULL;
 
         if (f)
         {
@@ -1633,7 +1639,7 @@ static void GameMain(void)
         PS3_Exit(1);
     }
 
-    PS3_Video_SetPerfLog(1);  // first builds: fps in the log
+    PS3_Video_SetPerfLog(PS3_LogsEnabled());  // fps in the log, with logs.txt
 
     // [7] the launcher: what is installed (USRDIR, USRDIR/addons), the
     // menu when there is more than one thing to play, the command line

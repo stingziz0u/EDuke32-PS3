@@ -60,6 +60,7 @@ extern "C" {
 
 /* ps3_log.c */
 void PS3_LogInit(void);
+int  PS3_LogsEnabled(void);          /* USRDIR/logs.txt there: the log is on */
 void PS3_Log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void PS3_LogRaw(const char *text);   /* as is, no newline added */
 void PS3_LogShutdown(void);

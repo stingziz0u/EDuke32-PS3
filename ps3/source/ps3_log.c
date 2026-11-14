@@ -11,6 +11,9 @@
  * Log file. On the PS3 there is no console: a failure looks like a black
  * screen and a trip back to the XMB. The log is the only witness, so:
  *
+ *  - it is off unless USRDIR/logs.txt exists (any content, even empty):
+ *    nothing is written to the HDD otherwise, the engine's own log
+ *    (eduke32.log / voidsw.log) and the fps lines included;
  *  - it is rotated on every boot (eduke32-ps3.log -> eduke32-ps3.old.log),
  *    so it never grows forever and the previous run survives a relaunch;
  *  - every write is flushed: after a crash, the last line is the one that
@@ -100,6 +103,18 @@ PS3_LogInit(void)
 		return;
 	}
 
+	/* only with USRDIR/logs.txt */
+	{
+		FILE *const on = fopen(PS3_USRDIR "/logs.txt", "r");
+
+		if (!on)
+		{
+			return;
+		}
+
+		fclose(on);
+	}
+
 	LogLockInit();
 
 	/* back in the launcher from the game (ps3_launcher.c's marker): the
@@ -143,6 +158,12 @@ PS3_LogInit(void)
 		fputs("=== " PS3_GAME_NAME " (PS3) log ===\n", logfp);
 		fflush(logfp);
 	}
+}
+
+int
+PS3_LogsEnabled(void)
+{
+	return logfp != NULL;
 }
 
 void
