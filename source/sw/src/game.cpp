@@ -5073,13 +5073,13 @@ getinput(SW_PACKET *loc, SWBOOL tied)
     info.dyaw = (info.dyaw * turn_scale)>>8;
 
 #ifdef __PPU__
-    // PS3: mact gives a stick 0.2 * scale/24576 of its travel, so at the
-    // menu's 1.00 (65536) a stick all the way gave 53%: Lo Wang at half his
-    // keys' speed. x15/8: at 1.00 the full travel, both sticks alike.
-    info.dx     = info.dx * 15 / 8;
-    info.dz     = info.dz * 15 / 8;
-    info.dyaw   = info.dyaw * 15 / 8;
-    info.dpitch = info.dpitch * 15 / 8;
+    // PS3: the sticks as EDuke32 reads them (player.cpp, P_GetInput): in
+    // floating point. VoidSW's fix16_from_int(stick) * turnamount overflowed
+    // past a third of the right stick's travel up or down (and past 32767
+    // for turning), so the look went wrong at full tilt and right half way.
+    // mact gives a stick 0.2 * scale/24576 of its travel: x15/8 makes the
+    // menu's 1.00 the full travel (Lo Wang at his keys' speed).
+    float const stick = (15.f / 8.f) / analogExtent;
 #endif
 
     int32_t svel = 0, vel = 0;
@@ -5088,12 +5088,20 @@ getinput(SW_PACKET *loc, SWBOOL tied)
     if (BUTTON(gamefunc_Strafe) && !pp->sop)
     {
         svel = -info.mousex;
+#ifdef __PPU__
+        svel -= lrintf(info.dyaw * stick * keymove);
+#else
         svel -= info.dyaw * keymove / analogExtent;
+#endif
     }
     else
     {
         q16angvel = fix16_div(fix16_from_int(info.mousex), fix16_from_int(32));
+#ifdef __PPU__
+        q16angvel = fix16_sadd(q16angvel, fix16_from_float(info.dyaw * stick * (turnamount << 1)));
+#else
         q16angvel += fix16_from_int(info.dyaw) / analogExtent * (turnamount << 1);
+#endif
     }
 
     if (aimMode)
@@ -5104,9 +5112,15 @@ getinput(SW_PACKET *loc, SWBOOL tied)
     if (gs.MouseInvert)
         q16aimvel = -q16aimvel;
 
+#ifdef __PPU__
+    q16aimvel = fix16_ssub(q16aimvel, fix16_from_float(info.dpitch * stick * turnamount));
+    svel -= lrintf(info.dx * stick * keymove);
+    vel -= lrintf(info.dz * stick * keymove);
+#else
     q16aimvel -= fix16_from_int(info.dpitch) * turnamount / analogExtent;
     svel -= info.dx * keymove / analogExtent;
     vel -= info.dz * keymove / analogExtent;
+#endif
 
     if (BUTTON(gamefunc_Strafe) && !pp->sop)
     {
