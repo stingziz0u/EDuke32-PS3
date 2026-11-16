@@ -47,7 +47,7 @@ include $(PS3DEV)/ppu_rules
 # TITLE/APPID with '?=' BEFORE these lines (handoff notes 3.15, 3.16).
 #----------------------------------------------------------------------------
 
-VERSION    := 1.0
+VERSION    := 1.0.1
 PATCHLEVEL := $(shell cat $(CURDIR)/PATCHLEVEL 2>/dev/null || echo 0)
 TARGET     := eduke32-ps3
 TITLE      := EDuke32
