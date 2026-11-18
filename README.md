@@ -43,7 +43,9 @@ data, and mods.
   on top of whichever full version of the base game you have. Any other
   `.grp`, `.zip` or `.pk3` in `addons` shows up on the launcher's MODS tab.
 - **Separate saves per game**: each base game, add-on and mod keeps its own
-  saves in `USRDIR/saves/<name>/`.
+  saves in `USRDIR/saves/<name>/`. Each save has its picture in the
+  Load/Save menus, drawn by the software renderer at 320x200 (the GPU's
+  frame can't be read back), as in Shadow Warrior.
 - **Video**: EDuke32's Polymost renderer drawn by the RSX, at a stable 60
   fps. The internal resolution (up to 1280x720) is scaled by the RSX to
   720p output. Frame rate limit (60 or 30 fps) and an FPS display are in

@@ -845,8 +845,20 @@ void G_DrawRooms(int32_t playerNum, int32_t smoothRatio)
             tileSetSize(TILE_SAVESHOT, 200, 320);
         }
 
+#ifdef __PPU__
+        // PS3: the save's thumbnail is drawn by the classic renderer into
+        // the tile, with Polymost too, as VoidSW does (ScreenSaveSetup):
+        // renderSetTarget switches to REND_CLASSIC until
+        // renderRestoreTarget below, so the 320x200 picture comes out of
+        // the software renderer at that size. Polymost has no way to give
+        // it: the RSX's frame can't be read back (glReadPixels gives black,
+        // and the readback of patch 22 froze saving), so G_ReadGLFrame only
+        // made a black one.
+        renderSetTarget(TILE_SAVESHOT, 200, 320);
+#else
         if (videoGetRenderMode() == REND_CLASSIC)
             renderSetTarget(TILE_SAVESHOT, 200, 320);
+#endif
     }
 
     if (ud.camerasprite >= 0)
