@@ -647,6 +647,11 @@ static int32_t MEOSV_DISPLAYSETUP_SHOWFPS[] = { 0, 1, 2, 3 };
 static MenuOptionSet_t MEOS_DISPLAYSETUP_SHOWFPS = MAKE_MENUOPTIONSET( MEOSN_DISPLAYSETUP_SHOWFPS, MEOSV_DISPLAYSETUP_SHOWFPS, 0x0 );
 static MenuOption_t MEO_DISPLAYSETUP_SHOWFPS = MAKE_MENUOPTION( &MF_Redfont, &MEOS_DISPLAYSETUP_SHOWFPS, &ud.showfps );
 static MenuEntry_t ME_DISPLAYSETUP_SHOWFPS = MAKE_MENUENTRY( "Show FPS:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_DISPLAYSETUP_SHOWFPS, Option );
+
+// PS3: how much of the TV the picture uses (overscan), vid_ps3_screenfit,
+// 70..100 % in steps of 2; the layer applies it on the next frame
+static MenuRangeInt32_t MEO_DISPLAYSETUP_SCREENFIT = MAKE_MENURANGE( &vid_ps3_screenfit, &MF_Redfont, 70, 100, 0, 16, DisplayTypeInteger );
+static MenuEntry_t ME_DISPLAYSETUP_SCREENFIT = MAKE_MENUENTRY( "TV screen fit:", &MF_Redfont, &MEF_BigOptionsRt, &MEO_DISPLAYSETUP_SCREENFIT, RangeInt32 );
 #endif
 
 
@@ -864,6 +869,7 @@ static MenuEntry_t *MEL_DISPLAYSETUP[] = {
     &ME_DISPLAYSETUP_UPSCALING,
 #ifdef __PPU__
     &ME_DISPLAYSETUP_SHOWFPS,
+    &ME_DISPLAYSETUP_SCREENFIT,
 #endif
 #if !defined EDUKE32_RETAIL_MENU && defined USE_OPENGL
     &ME_DISPLAYSETUP_RENDERER,

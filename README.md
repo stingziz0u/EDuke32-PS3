@@ -47,7 +47,10 @@ data, and mods.
 - **Video**: EDuke32's Polymost renderer drawn by the RSX, at a stable 60
   fps. The internal resolution (up to 1280x720) is scaled by the RSX to
   720p output. Frame rate limit (60 or 30 fps) and an FPS display are in
-  the video settings.
+  the video settings, and a **TV screen fit** (70-100 %) shrinks the
+  picture for TVs that cut its edges (overscan): Duke's Options -> Display
+  Setup, Shadow Warrior's Options -> Screen Menu, which also has the
+  **Texture Filter** (smooth or sharp textures).
 - **Audio**: 48000 Hz on the PS3's audio port. Duke's MIDI music through
   the OPL3 emulation or a **SoundFont** (`.sf2`), synthesized on an SPU so
   it costs the game nothing. Shadow Warrior's CD soundtrack as OGG or FLAC
@@ -192,7 +195,9 @@ nearest enemy in front of you that can be seen and follows it; moving and
 strafing stay free.
 
 Sticks: Shadow Warrior's Options -> Controller -> Sticks sets each axis'
-scale (1.00 by default), dead zone and saturation.
+scale (1.00 by default), dead zone and saturation, and **Invert** flips it
+(on the right stick's up/down page: inverted look). In Duke it is Options
+-> Control Setup -> Controller Setup -> "Inverted aiming".
 
 ## Known limitations
 

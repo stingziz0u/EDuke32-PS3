@@ -1384,6 +1384,10 @@ void videoShowFrame(int32_t w)
     if (offscreenrendering || novideo)
         return;
 
+    // the menus' TV screen fit (only marks the borders for clearing when it
+    // changes)
+    PS3_Video_SetFit(vid_ps3_screenfit);
+
 #ifdef USE_OPENGL
     if (bpp > 8)
     {

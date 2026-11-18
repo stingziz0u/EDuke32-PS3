@@ -49,6 +49,9 @@ char    g_keyNameTable[NUMKEYS][24];
 char    g_controllerSupportFlags;
 
 int32_t r_maxfps = -1;
+#ifdef __PPU__
+int32_t vid_ps3_screenfit = 90;
+#endif
 uint64_t g_frameDelay;
 
 
@@ -823,6 +826,9 @@ int32_t baselayer_init(void)
         { "r_rotatespriteinterp", "interpolate repeated rotatesprite calls", (void *)&r_rotatespriteinterp, CVAR_BOOL, 0, 1 },
         { "r_voxels","enable/disable automatic sprite->voxel rendering",(void *) &usevoxels, CVAR_BOOL, 0, 1 },
         { "r_maxfps", "limit the frame rate", (void *)&r_maxfps, CVAR_INT | CVAR_FUNCPTR, -2, 1000 },
+#ifdef __PPU__
+        { "vid_ps3_screenfit", "PS3: percentage of the TV the picture uses (overscan)", (void *)&vid_ps3_screenfit, CVAR_INT, 70, 100 },
+#endif
 #ifdef YAX_ENABLE
         { "r_tror_nomaskpass", "enable/disable additional pass in TROR software rendering", (void *)&r_tror_nomaskpass, CVAR_BOOL, 0, 1 },
 #endif

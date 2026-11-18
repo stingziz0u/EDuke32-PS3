@@ -114,6 +114,7 @@ extern int32_t MouseAnalogScale[MAXMOUSEAXES];
 extern int32_t JoystickAnalogScale[MAXJOYAXES];
 extern int32_t JoystickAnalogDead[MAXJOYAXES];
 extern int32_t JoystickAnalogSaturate[MAXJOYAXES];
+extern int32_t JoystickAnalogInvert[MAXJOYAXES];
 
 extern int32_t EnableRudder;
 

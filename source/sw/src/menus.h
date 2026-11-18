@@ -173,6 +173,7 @@ typedef enum
     sldr_fov,
     sldr_mousescalex, sldr_mousescaley,
     sldr_joyaxisscale, sldr_joyaxisanalog, sldr_joyaxisdead, sldr_joyaxissatur,
+    sldr_ps3screenfit,  // PS3: the TV's overscan (vid_ps3_screenfit)
     sldr_max
 } SLDRType;
 
@@ -183,6 +184,7 @@ typedef enum
 #define SLDR_SNDFXVOLMAX                16
 #define SLDR_MUSICVOLMAX                16
 #define SLDR_SCRSIZEMAX                 14
+#define SLDR_PS3SCREENFITMAX            16  // 70..100 %, steps of 2
 #define SLDR_BRIGHTNESSMAX              8
 #define SLDR_BORDERTILEMAX              (SW_SHAREWARE ? 21 : 38) // counted from border.c
 #define SLDR_GAMETYPEMAX                3
@@ -214,6 +216,8 @@ typedef enum
     btn_darts,
     btn_autoswitch,
     btn_interpolate_so,
+    btn_ps3_texfilter,  // PS3: Polymost's texture filter (GLTextureMode)
+    btn_joyaxisinvert,  // the axis on the Sticks page, inverted
     btn_max
 } BTNType;
 

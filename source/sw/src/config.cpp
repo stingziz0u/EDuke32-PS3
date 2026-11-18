@@ -671,6 +671,14 @@ void CONFIG_SetupJoystick(void)
         scale = JoystickAnalogSaturate[i];
         SCRIPT_GetNumber(scripthandle, "Controls", str,&scale);
         JoystickAnalogSaturate[i] = scale;
+
+#ifdef __PPU__
+        // PS3: the Sticks page's "Invert" (VoidSW kept it only in memory)
+        Bsprintf(str,"JoystickAnalogInvert%d",i);
+        scale = JoystickAnalogInvert[i];
+        SCRIPT_GetNumber(scripthandle, "Controls", str,&scale);
+        JoystickAnalogInvert[i] = !!scale;
+#endif
     }
 
 #ifdef __PPU__
@@ -702,6 +710,9 @@ apply:
         //CONTROL_SetJoyAxisDead(i, JoystickAnalogDead[i]);
         //CONTROL_SetJoyAxisSaturate(i, JoystickAnalogSaturate[i]);
         JOYSTICK_SetDeadZone(i, JoystickAnalogDead[i], JoystickAnalogSaturate[i]); // [JM] !CHECKME!
+#ifdef __PPU__
+        CONTROL_SetAnalogAxisInvert(i, JoystickAnalogInvert[i]);
+#endif
     }
 }
 
@@ -924,6 +935,10 @@ void CONFIG_WriteSetup(void)
 
         Bsprintf(buf,"JoystickAnalogSaturate%d",dummy);
         SCRIPT_PutNumber(scripthandle, "Controls", buf, JoystickAnalogSaturate[dummy], FALSE, FALSE);
+#ifdef __PPU__
+        Bsprintf(buf,"JoystickAnalogInvert%d",dummy);
+        SCRIPT_PutNumber(scripthandle, "Controls", buf, JoystickAnalogInvert[dummy], FALSE, FALSE);
+#endif
     }
 
     SCRIPT_Save(scripthandle, setupfilename);

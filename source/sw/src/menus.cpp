@@ -246,11 +246,18 @@ MenuItem screen_i[] =
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(3), 0, m_defshade, 0, NULL, NULL, NULL},
 
 #ifdef __PPU__
+    // PS3: smooth (bilinear, mipmapped) or sharp texels, at once
+    {DefButton(btn_ps3_texfilter, 0, "Texture Filter"), OPT_XS,  OPT_LINE(4), 1, m_defshade, 0, NULL, NULL, NULL},
+
     // PS3: always full screen on Polymost; the internal resolution (the
     // layer's modes, up to 1280x720), which the RSX scales to the TV
     {DefSlider(sldr_videores, 0, "Resolution"), OPT_XS,          OPT_LINE(5), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(5), 0, m_defshade, 0, NULL, NULL, NULL},
     {DefOption(0, "Apply Settings"), OPT_XSIDE,                  OPT_LINE(7), 1, m_defshade, 0, ApplyModeSettings, NULL, NULL},
+
+    // PS3: how much of the TV the picture uses (overscan), at once
+    {DefSlider(sldr_ps3screenfit, 0, "TV Screen Fit"), OPT_XS,   OPT_LINE(9), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefInert(0, NULL), OPT_XSIDE,                               OPT_LINE(9), 0, m_defshade, 0, NULL, NULL, NULL},
 #else
     {DefButton(btn_videofs, 0, "Fullscreen"), OPT_XS,            OPT_LINE(5), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefSlider(sldr_videobpp, 0, "Colour"), OPT_XS,              OPT_LINE(6), 1, m_defshade, 0, NULL, NULL, NULL},
@@ -350,6 +357,10 @@ MenuItem joyaxes_i[] =
 
     {DefSlider(sldr_joyaxisscale, 0, "Axis Scale"),     OPT_XS, OPT_LINE(2), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL),                              OPT_XSIDE, OPT_LINE(2), 0, m_defshade, 0, NULL, NULL, NULL},
+#ifdef __PPU__
+    // PS3: the axis inverted (the right stick's up/down: inverted look)
+    {DefButton(btn_joyaxisinvert, 0, "Invert"),         OPT_XS, OPT_LINE(3), 1, m_defshade, 0, NULL, NULL, NULL},
+#endif
 
     {DefSlider(sldr_joyaxisanalog, 0, "Analog"),        OPT_XS, OPT_LINE(4), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefInert(0, NULL),                              OPT_XSIDE, OPT_LINE(4), 0, m_defshade, 0, NULL, NULL, NULL},
@@ -1562,6 +1573,9 @@ static SWBOOL MNU_JoystickAxesInitialise(MenuItem_p UNUSED(mitem))
     strcpy(JoystickAxisName, joyGetName(0, JoystickAxisPage));
 #endif
     sprintf(JoystickAxisPageName, "Page %d / %d", JoystickAxisPage+1, joystick.numAxes);
+#ifdef __PPU__
+    buttonsettings[btn_joyaxisinvert] = !!JoystickAnalogInvert[JoystickAxisPage];
+#endif
     slidersettings[sldr_joyaxisanalog] = MNU_ControlAxisOffset(JoystickAnalogAxes[JoystickAxisPage]);
     slidersettings[sldr_joyaxisscale] = JoystickAnalogScale[JoystickAxisPage] >> 13;
     slidersettings[sldr_joyaxisdead] = JoystickAnalogDead[JoystickAxisPage] >> 10;
@@ -2266,6 +2280,10 @@ MNU_InitMenus(void)
     slidersettings[sldr_musicvolume] = gs.MusicVolume / (MUSIC_VOL_MAX_VALUE/SLDR_MUSICVOLMAX);
     slidersettings[sldr_scrsize] = gs.BorderNum;
     slidersettings[sldr_brightness] = gs.Brightness;
+#ifdef __PPU__
+    slidersettings[sldr_ps3screenfit] = (clamp(vid_ps3_screenfit, 70, 100) - 70) / 2;
+    buttonsettings[btn_ps3_texfilter] = (gltexfiltermode != TEXFILTER_OFF);
+#endif
     slidersettings[sldr_bordertile] = gs.BorderTile;
     slidersettings[sldr_fov] = (gs.FOV - MinFOV) / IncFOV;
 
@@ -3579,6 +3597,21 @@ MNU_DoButton(MenuItem_p item, SWBOOL draw)
         case btn_shadows:
             gs.Shadows = state = buttonsettings[item->button];
             break;
+#ifdef __PPU__
+        case btn_ps3_texfilter:
+            // as EDuke32's "Textures:" (menus.cpp): the ART textures again,
+            // with the new filter
+            state = buttonsettings[item->button];
+            gltexfiltermode = state ? TEXFILTER_ON : TEXFILTER_OFF;
+            gltexinvalidatetype(INVALIDATE_ART);
+            gltexapplyprops();
+            break;
+        case btn_joyaxisinvert:
+            state = buttonsettings[item->button];
+            JoystickAnalogInvert[JoystickAxisPage] = state;
+            CONTROL_SetAnalogAxisInvert(JoystickAxisPage, state);
+            break;
+#endif
 
         case btn_parental:
             if (gs.Password[0] != '\0' && gs.ParentalLock == TRUE)
@@ -4017,6 +4050,26 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         sprintf(tmp_text, "%d", gs.FOV);
         MNU_DrawString(OPT_XSIDE+tilesiz[pic_slidelend].x+tilesiz[pic_sliderend].x+(barwidth+1)*tilesiz[pic_slidebar].x, item->y, tmp_text, 1, 16);
     } break;
+
+#ifdef __PPU__
+    case sldr_ps3screenfit:
+        // vid_ps3_screenfit, 70..100 %: ps3layer.cpp gives it to the video
+        // layer every frame
+        barwidth = SLDR_PS3SCREENFITMAX;
+        offset = slidersettings[item->slider] + dir;
+
+        if (TEST(item->flags, mf_disabled))
+            break;
+
+        offset = max(offset, short(0));
+        offset = min(offset, short(barwidth-1));
+        slidersettings[item->slider] = offset;
+        vid_ps3_screenfit = 70 + offset * 2;
+
+        sprintf(tmp_text, "%d%%", vid_ps3_screenfit);
+        MNU_DrawSmallString(OPT_XSIDE+tilesiz[pic_slidelend].x+tilesiz[pic_sliderend].x+(MAX_SLDR_WIDTH+1)*tilesiz[pic_slidebar].x, item->y+4, tmp_text, 1, 16);
+        break;
+#endif
 
     case sldr_mousescalex:
     case sldr_mousescaley:
