@@ -79,7 +79,7 @@ data, and mods.
 
 ### Duke Nukem 3D
 
-Install `eduke32-ps3-1.0.1.pkg` from the XMB (shows up as "EDuke32"). This
+Install `eduke32-ps3-1.1.pkg` from the XMB (shows up as "EDuke32"). This
 creates `/dev_hdd0/game/DUKE3DPS3/USRDIR/` with an empty `addons/` folder.
 By FTP, place your own game data there:
 
@@ -103,7 +103,7 @@ OPL3 emulation) or "SoundFont"; the first `.sf2` in `USRDIR` is used.
 
 ### Shadow Warrior
 
-Install `voidsw-ps3-1.0.1.pkg` from the XMB (shows up as "VoidSW"). This
+Install `voidsw-ps3-1.1.pkg` from the XMB (shows up as "VoidSW"). This
 creates `/dev_hdd0/game/SHADOWPS3/USRDIR/` with empty `addons/` and
 `music/` folders. By FTP:
 
@@ -139,8 +139,8 @@ in `music/` as they are.
    ```bash
    git clone https://github.com/stingziz0u/EDuke32-PS3.git
    cd EDuke32-PS3
-   make -C ps3 -j$(nproc)            # -> ps3/eduke32-ps3-1.0.1.pkg
-   make -C ps3 GAME=sw -j$(nproc)    # -> ps3/voidsw-ps3-1.0.1.pkg
+   make -C ps3 -j$(nproc)            # -> ps3/eduke32-ps3-1.1.pkg
+   make -C ps3 GAME=sw -j$(nproc)    # -> ps3/voidsw-ps3-1.1.pkg
    ```
 
 The SoundFont synthesizer's SPU program needs `spu-gcc`; without it, or
